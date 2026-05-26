@@ -1,0 +1,1711 @@
+<script>
+// ADMIN REQUESTS MODULE SPLIT OUT
+// Moved from ClientJS without logic changes.
+
+
+/* Admin Request Clearview Patch v213
+   Safe client only addition. Uses separate server functions.
+*/
+(function adminRequestClearviewPatch_v213() {
+  var arState = window.adminRequestState || {
+    tab: 'JOB_LETTER',
+    data: null,
+    openRequestId: '',
+    filters: {
+      status: 'ALL',
+      restaurant: 'ALL',
+      search: '',
+      limit: '50'
+    }
+  };
+  window.adminRequestState = arState;
+
+  function byId(id) { return document.getElementById(id); }
+  function esc(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, function(ch) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch];
+    });
+  }
+  function attr(value) { return esc(value).replace(/`/g, '&#096;'); }
+  function token_() {
+    try {
+      if (typeof getSessionToken_ === 'function') return getSessionToken_();
+    } catch (error) {}
+    try { return sessionStorage.getItem('portalSessionToken') || ''; } catch (error2) {}
+    return '';
+  }
+  function notify(message, type) {
+    if (typeof showToast === 'function') {
+      showToast(message, type || 'info');
+    } else if (typeof appAlertV413 === 'function') {
+      appAlertV413(message, type || 'info');
+    } else {
+      console.log(message);
+    }
+  }
+
+  function injectStyle() {
+    if (byId('adminRequestClearviewStyleV213')) return;
+    var style = document.createElement('style');
+    style.id = 'adminRequestClearviewStyleV213';
+    style.textContent =
+      '.arc-page{width:100%;min-height:calc(100vh - 130px);background:#f4f4f4;border:1px solid #bdbdbd;box-shadow:0 12px 32px rgba(15,23,42,.12);font-family:Arial,sans-serif}' +
+      '.arc-titlebar{height:56px;background:#0076b6;color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 18px;box-sizing:border-box}' +
+      '.arc-titlebar h3{font-size:24px;line-height:56px;font-weight:400;margin:0}' +
+      '.arc-back{height:36px;border:1px solid rgba(255,255,255,.55);background:rgba(255,255,255,.12);color:#fff;border-radius:3px;padding:0 14px;font-weight:700;cursor:pointer}' +
+      '.arc-tabs{height:54px;display:flex;align-items:stretch;background:#e5e5e5;border-bottom:1px solid #bdbdbd;overflow:hidden}' +
+      '.arc-tab{width:220px;min-width:220px;max-width:220px;height:54px;border:0;border-right:1px solid #c8c8c8;background:#e5e5e5;color:#111;font-size:16px;font-weight:800;cursor:pointer;box-sizing:border-box}' +
+      '.arc-tab.active{background:#fff;border-bottom:3px solid #0076b6}' +
+      '.arc-toolbar{min-height:58px;display:flex;align-items:center;gap:10px;padding:10px 14px;background:#eeeeee;border-bottom:1px solid #d0d0d0;box-sizing:border-box}' +
+      '.arc-toolbar-note{font-weight:700;color:#333}' +
+      '.arc-content{padding:14px;box-sizing:border-box}' +
+      '.arc-section{background:#fff;border:1px solid #d8d8d8;margin-bottom:14px}' +
+      '.arc-section-title{background:#f2f6f9;border-bottom:1px solid #d8d8d8;padding:10px 14px;font-weight:800;color:#18324a}' +
+      '.arc-form{display:grid;grid-template-columns:1fr 1fr;gap:12px 24px;padding:14px 18px 16px}' +
+      '.arc-field{display:grid;grid-template-columns:180px minmax(180px,1fr);gap:8px;align-items:center}' +
+      '.arc-field.full{grid-column:1/-1;align-items:start}' +
+      '.arc-field label{font-weight:700;text-align:right;font-size:.92rem;color:#222}' +
+      '.arc-input,.arc-select,.arc-textarea{width:100%;min-height:36px;border:1px solid #9d9d9d;background:#fff;padding:6px 8px;font:inherit;border-radius:2px;box-sizing:border-box}' +
+      '.arc-textarea{min-height:76px;resize:vertical}' +
+      '.arc-readonly{background:#f5f5f5;color:#444}' +
+      '.arc-help{grid-column:1/-1;color:#666;font-size:.86rem;margin-top:-6px}' +
+      '.arc-actions{grid-column:1/-1;display:flex;justify-content:flex-end;gap:8px;padding-top:4px}' +
+      '.arc-btn{height:38px;min-width:120px;border:1px solid #8c8c8c;background:#f7f7f7;color:#111;border-radius:2px;font-weight:700;cursor:pointer}' +
+      '.arc-btn.primary{background:#0076b6;border-color:#0076b6;color:#fff}' +
+      '.arc-filter{display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:10px;padding:12px;background:#f7f7f7;border-bottom:1px solid #ddd}' +
+      '.arc-table-wrap{overflow:auto;max-height:560px}' +
+      '.arc-table{width:100%;border-collapse:collapse;font-size:.92rem}' +
+      '.arc-table th{position:sticky;top:0;background:#ebebeb;border:1px solid #cfcfcf;text-align:left;padding:8px;z-index:1}' +
+      '.arc-table td{border:1px solid #ddd;padding:8px;vertical-align:top}' +
+      '.arc-row{cursor:pointer}' +
+      '.arc-row:hover{background:#f8fbff}' +
+      '.arc-badge{display:inline-flex;align-items:center;border-radius:999px;padding:3px 10px;font-size:.8rem;font-weight:800;background:#e9f2ff;color:#075a9c;border:1px solid #b9d7ff}' +
+      '.arc-badge.completed{background:#e9f8ed;color:#17622a;border-color:#bce7c5}' +
+      '.arc-badge.cancelled{background:#f5f5f5;color:#757575;border-color:#bdbdbd}' +
+      '.arc-detail{background:#fbfbfb;padding:12px}' +
+      '.arc-detail-grid{display:grid;grid-template-columns:220px 1fr;gap:8px 12px}' +
+      '.arc-inline-actions{display:flex;gap:8px;align-items:center;justify-content:flex-start;flex-wrap:wrap}' +
+      '.arc-note-readonly{max-width:420px;white-space:normal;color:#333}' +
+      '.arc-detail-label{font-weight:800;color:#333;text-align:right}' +
+      '.arc-history{margin-top:10px;border-top:1px solid #ddd;padding-top:8px}' +
+      '.arc-history-item{padding:6px 0;border-bottom:1px solid #eee}' +
+      '.arc-empty{padding:18px;text-align:center;color:#777}' +
+      '.arc-save-hidden{display:none !important}' +
+      '.arc-status-col{width:128px;min-width:128px;max-width:128px}' +
+      '.arc-update-col{width:168px;min-width:168px;max-width:168px}' +
+      '.arc-update-cell .arc-inline-actions{gap:4px;flex-wrap:nowrap}' +
+      '.arc-status-select{width:112px !important;min-width:112px !important;max-width:112px !important;height:32px !important;min-height:32px !important;font-size:.84rem !important;padding:3px 5px !important}' +
+      '.arc-save-mini{width:56px !important;min-width:56px !important;height:32px !important;min-height:32px !important;padding:0 8px !important;font-size:.82rem !important}' +
+      '.arc-view-btn{width:70px !important;min-width:70px !important;height:32px !important;min-height:32px !important;padding:0 8px !important;font-size:.82rem !important}' +
+      '.arc-table.compact td{padding:6px 7px}' +
+      '.arc-more-bar{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}' +
+      '.arc-history.is-hidden{display:none}' +
+      '@media(max-width:1000px){.arc-form,.arc-filter{grid-template-columns:1fr}.arc-field{grid-template-columns:1fr}.arc-field label,.arc-detail-label{text-align:left}.arc-detail-grid{grid-template-columns:1fr}.arc-tab{width:170px;min-width:170px;max-width:170px}}';
+    document.head.appendChild(style);
+  }
+
+  function showWorkspace() {
+    var centerColumn = document.querySelector('.center-column');
+    var newsletter = document.querySelector('.newsletter');
+    if (centerColumn && typeof adminWorkspace !== 'undefined' && adminWorkspace) {
+      centerColumn.innerHTML = '';
+      centerColumn.appendChild(adminWorkspace);
+      centerColumn.style.display = 'block';
+    }
+    if (newsletter) newsletter.style.display = 'none';
+    if (typeof adminWorkspace !== 'undefined' && adminWorkspace) {
+      adminWorkspace.hidden = false;
+      adminWorkspace.style.display = 'grid';
+    }
+    var adminHeader = adminWorkspace ? adminWorkspace.querySelector('.admin-workspace-header') : null;
+    if (adminHeader) adminHeader.style.display = 'none';
+    if (typeof adminSections !== 'undefined' && adminSections) adminSections.innerHTML = getHtml();
+  }
+
+  function tabButton(key, label) {
+    return '<button class="arc-tab' + (arState.tab === key ? ' active' : '') + '" type="button" data-arc-tab="' + attr(key) + '">' + esc(label) + '</button>';
+  }
+
+  function getHtml() {
+    return '' +
+      '<section class="arc-page" id="adminRequestPage">' +
+        '<div class="arc-titlebar"><h3>Admin Request</h3><button class="arc-back" type="button" id="arcBackDashboardBtn">Back to Dashboard</button></div>' +
+        '<div class="arc-tabs" id="arcTabs">' +
+          tabButton('JOB_LETTER', 'Job Letter') +
+          tabButton('OFFICE_SUPPLIES', 'Office Supplies') +
+          tabButton('MANAGE', 'Manage Requests') +
+        '</div>' +
+        '<div class="arc-toolbar" id="arcToolbar"></div>' +
+        '<div class="arc-content" id="arcContent"><div class="arc-section"><div class="arc-empty">Loading...</div></div></div>' +
+      '</section>';
+  }
+
+  function bindEvents() {
+    var tabs = byId('arcTabs');
+    if (tabs) {
+      tabs.querySelectorAll('[data-arc-tab]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          arState.tab = btn.dataset.arcTab;
+          renderPage();
+        });
+      });
+    }
+    var back = byId('arcBackDashboardBtn');
+    if (back) {
+      back.addEventListener('click', function() {
+        if (typeof goBackToDashboardHome === 'function') return goBackToDashboardHome();
+        if (typeof restoreDashboardHomeLayout_ === 'function') restoreDashboardHomeLayout_();
+      });
+    }
+  }
+
+  function redrawTabs() {
+    var tabs = byId('arcTabs');
+    if (!tabs) return;
+    tabs.innerHTML = tabButton('JOB_LETTER', 'Job Letter') + tabButton('OFFICE_SUPPLIES', 'Office Supplies') + tabButton('MANAGE', 'Manage Requests');
+    bindEvents();
+  }
+
+  function renderToolbar() {
+    var toolbar = byId('arcToolbar');
+    if (!toolbar) return;
+    var note = {
+      JOB_LETTER: 'Request job letters, standard letters, or OHIP letters',
+      OFFICE_SUPPLIES: 'Request bank books, toner, or printing paper',
+      MANAGE: 'View requests, update completed status, and add notes'
+    }[arState.tab] || '';
+    toolbar.innerHTML = '<span class="arc-toolbar-note">' + esc(note) + '</span><span style="flex:1"></span>' + (arState.tab === 'MANAGE' ? '<button class="arc-btn" id="arcExportBtn" type="button">Export</button>' : '') + '<button class="arc-btn" id="arcRefreshBtn" type="button">Refresh</button>';
+    var refresh = byId('arcRefreshBtn');
+    if (refresh) refresh.addEventListener('click', loadData);
+    var exportBtn = byId('arcExportBtn');
+    if (exportBtn) exportBtn.addEventListener('click', exportRequestsCsv);
+  }
+
+  function loadData() {
+    var content = byId('arcContent');
+    if (content) content.innerHTML = '<div class="arc-section"><div class="arc-empty">Loading...</div></div>';
+    google.script.run
+      .withSuccessHandler(function(response) {
+        if (!response || !response.success) {
+          if (content) content.innerHTML = '<div class="arc-section"><div class="arc-empty">' + esc((response && response.error) || 'Could not load admin requests.') + '</div></div>';
+          return;
+        }
+        arState.data = response.data || {};
+        renderPage();
+      })
+      .withFailureHandler(function(error) {
+        if (content) content.innerHTML = '<div class="arc-section"><div class="arc-empty">' + esc(error && error.message ? error.message : 'Could not load admin requests.') + '</div></div>';
+      })
+      .getAdminRequestWorkspaceData(token_());
+  }
+
+  function renderPage() {
+    redrawTabs();
+    renderToolbar();
+    if (arState.tab === 'JOB_LETTER') renderJobLetter();
+    if (arState.tab === 'OFFICE_SUPPLIES') renderOfficeSupplies();
+    if (arState.tab === 'MANAGE') renderManageRequests();
+  }
+
+  function restaurants() { return (arState.data && arState.data.restaurants) || []; }
+  function employees() { return (arState.data && arState.data.employees) || []; }
+  function requests() { return (arState.data && arState.data.requests) || []; }
+
+  function restaurantOptions(selected, includeAll) {
+    var html = includeAll ? '<option value="ALL">All Restaurants</option>' : '<option value="">Not Selected</option>';
+    html += restaurants().map(function(r) {
+      var value = String(r.restaurantId || r.restaurant_id || '').trim();
+      var number = String(r.restaurantNumber || r.restaurant_number || r.restaurantCode || r.restaurant_code || r.number || '').trim();
+      var name = String(r.restaurantName || r.restaurant_name || r.name || '').trim();
+      if (!value && number) value = 'REST_' + number;
+      var label = ((number ? number + ' ' : '') + name).trim() || value;
+      return '<option value="' + attr(value) + '"' + (String(selected || '') === value ? ' selected' : '') + '>' + esc(label) + '</option>';
+    }).join('');
+    return html;
+  }
+
+  function employeeRestaurantIds(member) {
+    if (Array.isArray(member.restaurantIds)) return member.restaurantIds.map(String);
+    return String(member.restaurant_id || member.restaurantId || '').split(',').map(function(v) { return v.trim(); }).filter(Boolean);
+  }
+
+  function employeeOptions(restaurantId, selected) {
+    var rows = employees().filter(function(m) {
+      if (!restaurantId) return false;
+      return employeeRestaurantIds(m).indexOf(String(restaurantId)) !== -1;
+    });
+    if (!restaurantId) return '<option value="">Select restaurant first</option>';
+    if (!rows.length) return '<option value="">No employees found</option>';
+    return '<option value="">Not Selected</option>' + rows.map(function(m) {
+      var id = String(m.teamMemberId || m.team_member_id || m.employeeId || m.employee_id || m.name || '');
+      return '<option value="' + attr(id) + '"' + (String(selected || '') === id ? ' selected' : '') + '>' + esc((m.name || m.full_name || '-') + ' | ' + (m.mobile || m.phone || '-')) + '</option>';
+    }).join('');
+  }
+
+  function getEmployeeById(id) {
+    id = String(id || '');
+    return employees().find(function(m) {
+      return String(m.teamMemberId || m.team_member_id || m.employeeId || m.employee_id || m.name || '') === id;
+    }) || null;
+  }
+
+  function field(id, label, type, required) {
+    return '<div class="arc-field"><label for="' + attr(id) + '">' + esc(label) + (required ? ' *' : '') + '</label><input class="arc-input" id="' + attr(id) + '" type="' + attr(type || 'text') + '"' + (required ? ' required' : '') + '></div>';
+  }
+
+  function renderJobLetter() {
+    var content = byId('arcContent');
+    if (!content) return;
+    content.innerHTML = '' +
+      '<div class="arc-section"><div class="arc-section-title">Job Letter Request</div>' +
+        '<form class="arc-form" id="arcJobLetterForm">' +
+          '<div class="arc-field"><label>Select Restaurant *</label><select class="arc-select" id="arcJlRestaurant" required>' + restaurantOptions('', false) + '</select></div>' +
+          '<div class="arc-field"><label>Type of Letter *</label><select class="arc-select" id="arcJlType" required><option value="">Not Selected</option><option>Job Letter with Job Description</option><option>Standard Job Letter</option><option>OHIP</option></select></div>' +
+          '<div class="arc-field"><label>Select Employee Name *</label><select class="arc-select" id="arcJlEmployee" required><option value="">Select restaurant first</option></select></div>' +
+          '<div class="arc-field"><label>Employee Status</label><input class="arc-input arc-readonly" id="arcJlEmployeeStatus" disabled></div>' +
+          '<div class="arc-field"><label>Team Member Gender *</label><select class="arc-select" id="arcJlGender" required><option value="">Not Selected</option><option>Male</option><option>Female</option><option>Preferred to be called They</option></select></div>' +
+          '<div class="arc-field"><label>Team Member Position *</label><select class="arc-select" id="arcJlPosition" required><option value="">Not Selected</option><option>Team Member</option><option>Supervisor</option><option>Assistant Manager</option><option>Manager</option><option>Other</option></select></div>' +
+          '<div class="arc-field" id="arcJlOtherPositionWrap" style="display:none"><label>Other Position</label><input class="arc-input" id="arcJlOtherPosition"></div>' +
+          '<div class="arc-field"><label>Team Member Status *</label><select class="arc-select" id="arcJlEmploymentType" required><option value="">Not Selected</option><option>Full-time</option><option>Part-time</option></select></div>' +
+          field('arcJlStartedDate', 'Date They Started Working', 'date', true) +
+          '<div class="arc-help">Please double check with Clearview and the team member or supervisor in case they moved from another location.</div>' +
+          '<div class="arc-field full"><label>Other Notes</label><textarea class="arc-textarea" id="arcJlNotes"></textarea></div>' +
+          '<div class="arc-actions"><button class="arc-btn" type="button" id="arcJlClearBtn">Clear</button><button class="arc-btn primary" type="submit">Next</button></div>' +
+        '</form></div>';
+
+    var restaurant = byId('arcJlRestaurant');
+    var employee = byId('arcJlEmployee');
+    var position = byId('arcJlPosition');
+    if (restaurant) restaurant.addEventListener('change', function() {
+      if (employee) employee.innerHTML = employeeOptions(restaurant.value, '');
+      updateEmployeeStatusPreview();
+    });
+    if (employee) employee.addEventListener('change', updateEmployeeStatusPreview);
+    if (position) position.addEventListener('change', function() {
+      var wrap = byId('arcJlOtherPositionWrap');
+      if (wrap) wrap.style.display = position.value === 'Other' ? 'grid' : 'none';
+    });
+    var clear = byId('arcJlClearBtn');
+    if (clear) clear.addEventListener('click', function() { renderJobLetter(); });
+    var form = byId('arcJobLetterForm');
+    if (form) form.addEventListener('submit', submitJobLetter);
+  }
+
+  function updateEmployeeStatusPreview() {
+    var select = byId('arcJlEmployee');
+    var status = byId('arcJlEmployeeStatus');
+    var member = select ? getEmployeeById(select.value) : null;
+    if (status) status.value = member ? String(member.status || member.employeeStatus || '') : '';
+  }
+
+  function setSavingButton(button, isSaving, label) {
+    if (!button) return;
+    if (isSaving) {
+      button.dataset.originalText = button.textContent || label || 'Save';
+      button.textContent = 'Saving…';
+      button.disabled = true;
+    } else {
+      button.textContent = button.dataset.originalText || label || 'Save';
+      button.disabled = false;
+    }
+  }
+
+  function submitJobLetter(event) {
+    event.preventDefault();
+    var form = byId('arcJobLetterForm');
+    var submitBtn = form ? form.querySelector('button[type="submit"]') : null;
+    var employee = getEmployeeById((byId('arcJlEmployee') || {}).value || '');
+    var payload = {
+      sessionToken: token_(),
+      restaurantId: (byId('arcJlRestaurant') || {}).value || '',
+      letterType: (byId('arcJlType') || {}).value || '',
+      employeeId: (byId('arcJlEmployee') || {}).value || '',
+      employeeName: employee ? (employee.name || employee.full_name || '') : '',
+      employeeStatus: employee ? (employee.status || '') : '',
+      gender: (byId('arcJlGender') || {}).value || '',
+      position: (byId('arcJlPosition') || {}).value || '',
+      manualPosition: (byId('arcJlOtherPosition') || {}).value || '',
+      employmentType: (byId('arcJlEmploymentType') || {}).value || '',
+      startedDate: (byId('arcJlStartedDate') || {}).value || '',
+      issuerNotes: (byId('arcJlNotes') || {}).value || ''
+    };
+    if (!payload.restaurantId || !payload.letterType || !payload.employeeId || !payload.gender || !payload.position || !payload.employmentType || !payload.startedDate) {
+      notify('Please complete all required fields.', 'error');
+      return;
+    }
+    setSavingButton(submitBtn, true, 'Next');
+    google.script.run
+      .withSuccessHandler(function(response) {
+        setSavingButton(submitBtn, false, 'Next');
+        if (!response || !response.success) return notify((response && response.error) || 'Request could not be saved.', 'error');
+        notify('Job letter request submitted successfully. You can track it in Manage Requests.', 'success');
+        arState.editingRequest = null;
+        // Push new record into local state immediately — no reload needed
+        var newRecord = (response.data && response.data.request) ? response.data.request : {
+          requestId: (response.data && response.data.requestId) || ('JL-' + Date.now()),
+          requestType: 'JOB_LETTER',
+          restaurantId: payload.restaurantId,
+          restaurantCode: (restaurants().find(function(r) { return r.restaurantId === payload.restaurantId; }) || {}).restaurantCode || payload.restaurantId,
+          employeeName: payload.employeeName,
+          letterType: payload.letterType,
+          gender: payload.gender,
+          position: payload.position,
+          manualPosition: payload.manualPosition,
+          employmentType: payload.employmentType,
+          startedDate: payload.startedDate,
+          issuerNotes: payload.issuerNotes,
+          status: 'New Request',
+          createdAt: new Date().toISOString(),
+          statusHistory: []
+        };
+        if (arState.data && Array.isArray(arState.data.requests)) {
+          arState.data.requests.unshift(newRecord);
+        }
+        arState.tab = 'MANAGE';
+        renderPage();
+      })
+      .withFailureHandler(function(error) {
+        setSavingButton(submitBtn, false, 'Next');
+        notify(error && error.message ? error.message : 'Request could not be saved.', 'error');
+      })
+      .createAdminJobLetterRequest(payload);
+  }
+
+  function renderOfficeSupplies() {
+    var content = byId('arcContent');
+    if (!content) return;
+    content.innerHTML = '' +
+      '<div class="arc-section"><div class="arc-section-title">Office Supplies Request</div>' +
+        '<form class="arc-form" id="arcSuppliesForm">' +
+          '<div class="arc-field"><label>Select Restaurant *</label><select class="arc-select" id="arcOsRestaurant" required>' + restaurantOptions('', false) + '</select></div>' +
+          '<div class="arc-field"><label>Select Request Type *</label><select class="arc-select" id="arcOsType" required><option value="">Not Selected</option><option>Bank Books</option><option>Toner</option><option>Printing Paper</option></select></div>' +
+          '<div class="arc-field full"><label>Office Supplies Need *</label><textarea class="arc-textarea" id="arcOsDetails" required></textarea></div>' +
+          '<div class="arc-help">If you request toner, please mention the printer model and toner or cartridge number.</div>' +
+          '<div class="arc-field full"><label>Other Notes</label><textarea class="arc-textarea" id="arcOsNotes"></textarea></div>' +
+          '<div class="arc-actions"><button class="arc-btn" type="button" id="arcOsClearBtn">Clear</button><button class="arc-btn primary" type="submit">Next</button></div>' +
+        '</form></div>';
+    var clear = byId('arcOsClearBtn');
+    if (clear) clear.addEventListener('click', function() { renderOfficeSupplies(); });
+    var form = byId('arcSuppliesForm');
+    if (form) form.addEventListener('submit', submitOfficeSupplies);
+  }
+
+  function submitOfficeSupplies(event) {
+    event.preventDefault();
+    var form = byId('arcSuppliesForm');
+    var submitBtn = form ? form.querySelector('button[type="submit"]') : null;
+    var payload = {
+      sessionToken: token_(),
+      restaurantId: (byId('arcOsRestaurant') || {}).value || '',
+      supplyType: (byId('arcOsType') || {}).value || '',
+      supplyDetails: (byId('arcOsDetails') || {}).value || '',
+      issuerNotes: (byId('arcOsNotes') || {}).value || ''
+    };
+    if (!payload.restaurantId || !payload.supplyType || !payload.supplyDetails) {
+      notify('Please complete all required fields.', 'error');
+      return;
+    }
+    setSavingButton(submitBtn, true, 'Next');
+    google.script.run
+      .withSuccessHandler(function(response) {
+        setSavingButton(submitBtn, false, 'Next');
+        if (!response || !response.success) return notify((response && response.error) || 'Request could not be saved.', 'error');
+        notify('Office supplies request submitted successfully. You can track it in Manage Requests.', 'success');
+        arState.editingRequest = null;
+        var newRecord = (response.data && response.data.request) ? response.data.request : {
+          requestId: (response.data && response.data.requestId) || ('OS-' + Date.now()),
+          requestType: 'OFFICE_SUPPLIES',
+          restaurantId: payload.restaurantId,
+          restaurantCode: (restaurants().find(function(r) { return r.restaurantId === payload.restaurantId; }) || {}).restaurantCode || payload.restaurantId,
+          supplyType: payload.supplyType,
+          supplyDetails: payload.supplyDetails,
+          issuerNotes: payload.issuerNotes,
+          status: 'New Request',
+          createdAt: new Date().toISOString(),
+          statusHistory: []
+        };
+        if (arState.data && Array.isArray(arState.data.requests)) {
+          arState.data.requests.unshift(newRecord);
+        }
+        arState.tab = 'MANAGE';
+        renderPage();
+      })
+      .withFailureHandler(function(error) {
+        setSavingButton(submitBtn, false, 'Next');
+        notify(error && error.message ? error.message : 'Request could not be saved.', 'error');
+      })
+      .createAdminOfficeSupplyRequest(payload);
+  }
+
+  function isTerminalStatus_(status) {
+    var s = String(status || '').toUpperCase();
+    return s === 'RECEIVED' || s === 'CANCELLED';
+  }
+
+  function renderManageRequests() {
+    var content = byId('arcContent');
+    if (!content) return;
+    var f = arState.filters || {};
+    var rows = getFilteredRequests();
+    var allReqs = requests();
+    var jobCount = allReqs.filter(function(r) { return String(r.requestType||'') === 'JOB_LETTER' && !isTerminalStatus_(r.status); }).length;
+    var supplyCount = allReqs.filter(function(r) { return String(r.requestType||'') === 'OFFICE_SUPPLIES' && !isTerminalStatus_(r.status); }).length;
+    content.innerHTML = '' +
+      '<div class="arc-section">' +
+        '<div class="arc-filter">' +
+          '<select class="arc-select" id="arcFilterRestaurant">' + restaurantOptions(f.restaurant || 'ALL', true) + '</select>' +
+          '<select class="arc-select" id="arcFilterType"><option value="ALL">All Types</option><option value="JOB_LETTER"' + ((f.type||'ALL')==='JOB_LETTER'?' selected':'') + '>Job Letter' + (jobCount?' ('+jobCount+')':'') + '</option><option value="OFFICE_SUPPLIES"' + ((f.type||'ALL')==='OFFICE_SUPPLIES'?' selected':'') + '>Office Supplies' + (supplyCount?' ('+supplyCount+')':'') + '</option></select>' +
+          '<select class="arc-select" id="arcFilterStatus"><option value="ALL">All Status</option><option value="New Request"' + ((f.status||'ALL')==='New Request'?' selected':'') + '>New Request</option><option value="Completed"' + ((f.status||'')==='Completed'?' selected':'') + '>Completed by Admin</option><option value="Received"' + ((f.status||'')==='Received'?' selected':'') + '>Received</option></select>' +
+          '<input class="arc-input" id="arcFilterSearch" value="' + attr(f.search || '') + '" placeholder="Search employee, request, notes">' +
+          '<select class="arc-select" id="arcFilterLimit"><option value="50"' + ((f.limit||'50')==='50'?' selected':'') + '>Recent 50</option><option value="100"' + ((f.limit||'')==='100'?' selected':'') + '>Recent 100</option><option value="ALL"' + ((f.limit||'')==='ALL'?' selected':'') + '>All Rows</option></select>' +
+          '<button class="arc-btn" id="arcApplyFilterBtn" type="button">Apply</button>' +
+        '</div>' +
+        '<div class="arc-table-wrap">' + requestTable(rows) + '</div>' +
+      '</div>';
+    var apply = byId('arcApplyFilterBtn');
+    if (apply) apply.addEventListener('click', function() {
+      arState.filters.restaurant = (byId('arcFilterRestaurant') || {}).value || 'ALL';
+      arState.filters.type = (byId('arcFilterType') || {}).value || 'ALL';
+      arState.filters.status = (byId('arcFilterStatus') || {}).value || 'ALL';
+      arState.filters.search = (byId('arcFilterSearch') || {}).value || '';
+      arState.filters.limit = (byId('arcFilterLimit') || {}).value || '50';
+      renderManageRequests();
+    });
+    content.querySelectorAll('[data-arc-open]').forEach(function(row) {
+      row.addEventListener('click', function(event) {
+        if (event.target && (event.target.tagName === 'SELECT' || event.target.tagName === 'TEXTAREA' || event.target.tagName === 'BUTTON' || event.target.tagName === 'A')) return;
+        arState.openRequestId = arState.openRequestId === row.dataset.arcOpen ? '' : row.dataset.arcOpen;
+        renderManageRequests();
+      });
+    });
+    content.querySelectorAll('[data-arc-view]').forEach(function(btn) {
+      btn.addEventListener('click', function(event) {
+        event.preventDefault(); event.stopPropagation();
+        arState.openRequestId = arState.openRequestId === btn.dataset.arcView ? '' : btn.dataset.arcView;
+        renderManageRequests();
+      });
+    });
+    content.querySelectorAll('[data-arc-history-toggle]').forEach(function(btn) {
+      btn.addEventListener('click', function(event) {
+        event.preventDefault(); event.stopPropagation();
+        var box = byId('arcHistoryBox_' + btn.dataset.arcHistoryToggle);
+        if (!box) return;
+        var hidden = box.classList.toggle('is-hidden');
+        btn.textContent = hidden ? 'View History' : 'Hide History';
+      });
+    });
+    content.querySelectorAll('[data-arc-save]').forEach(function(btn) {
+      btn.addEventListener('click', function() { saveRequestStatus(btn.dataset.arcSave); });
+    });
+    content.querySelectorAll('[data-arc-status-select]').forEach(function(select) {
+      select.addEventListener('change', function() { handleStatusChange_(select); });
+    });
+    content.querySelectorAll('[data-arc-note-input]').forEach(function(note) {
+      note.addEventListener('input', function() { showSaveForRequest(note.dataset.arcNoteInput); });
+    });
+    content.querySelectorAll('[data-arc-edit]').forEach(function(btn) {
+      btn.addEventListener('click', function(event) {
+        event.stopPropagation();
+        var rid = btn.dataset.arcEdit;
+        var row = requests().find(function(r) { return String(r.requestId||'') === rid; });
+        if (!row) return;
+        arState.editingRequest = row;
+        arState.tab = String(row.requestType||'') === 'JOB_LETTER' ? 'JOB_LETTER' : 'OFFICE_SUPPLIES';
+        renderPage();
+      });
+    });
+    content.querySelectorAll('[data-arc-cancel]').forEach(function(btn) {
+      btn.addEventListener('click', function(event) {
+        event.stopPropagation();
+        var rid = btn.dataset.arcCancel;
+        appConfirmV413('Cancel this request? This cannot be undone.', function() {
+          var rowEl = typeof findPortalRowV414 === 'function' ? findPortalRowV414(btn) : null;
+          if (typeof setPortalRowSavingV414 === 'function') setPortalRowSavingV414(rowEl, true, 'Saving...');
+          btn.disabled = true; btn.textContent = 'Cancelling...';
+          google.script.run
+            .withSuccessHandler(function(res) {
+              if (!res || !res.success) return notify((res && res.error) || 'Could not cancel request.', 'error');
+              if (arState.data && arState.data.requests) arState.data.requests = arState.data.requests.filter(function(r) { return String(r.requestId||'') !== rid; });
+              notify('Request cancelled.', 'success');
+              renderManageRequests();
+            })
+            .withFailureHandler(function(err) { if (typeof setPortalRowSavingV414 === 'function') setPortalRowSavingV414(rowEl, false); notify(err && err.message ? err.message : 'Could not cancel.', 'error'); btn.disabled = false; btn.textContent = 'Cancel'; })
+            .updateAdminRequestStatus({ sessionToken: token_(), requestId: rid, status: 'Cancelled', adminNotes: 'Cancelled by requester' });
+        }, null, { title: 'Cancel Request', okText: 'Cancel Request', danger: true });
+        return;
+      });
+    });
+    content.querySelectorAll('[data-arc-received]').forEach(function(btn) {
+      btn.addEventListener('click', function(event) {
+        event.stopPropagation();
+        var rid = btn.dataset.arcReceived;
+        btn.disabled = true; btn.textContent = 'Confirming...';
+        google.script.run
+          .withSuccessHandler(function(res) {
+            if (!res || !res.success) return notify((res && res.error) || 'Could not confirm.', 'error');
+            updateLocalRequestAfterSave(rid, 'Received', '');
+            notify('Receipt confirmed.', 'success');
+            renderManageRequests();
+          })
+          .withFailureHandler(function(err) { notify(err && err.message ? err.message : 'Could not confirm.', 'error'); btn.disabled = false; btn.textContent = 'Mark as Received'; })
+          .confirmOfficeSupplyReceived({ sessionToken: token_(), requestId: rid });
+      });
+    });
+  }
+
+  function handleStatusChange_(select) {
+    var requestId = select.dataset.arcStatusSelect;
+    var original = String(select.dataset.originalStatus || 'New Request');
+    var current = String(select.value || 'New Request');
+    var saveButtons = document.querySelectorAll('[data-arc-save="' + requestId + '"]');
+    saveButtons.forEach(function(btn) {
+      if (current !== original && current === 'Completed') {
+        btn.classList.remove('arc-save-hidden');
+      } else {
+        btn.classList.add('arc-save-hidden');
+      }
+    });
+  }
+
+  function showSaveForRequest(requestId) {
+    document.querySelectorAll('[data-arc-save="' + requestId + '"]').forEach(function(btn) {
+      btn.classList.remove('arc-save-hidden');
+    });
+  }
+
+  function getFilteredRequests() {
+    var f = arState.filters || {};
+    var search = String(f.search || '').toLowerCase();
+    var rows = requests().filter(function(r) {
+      if (f.restaurant && f.restaurant !== 'ALL' && String(r.restaurantId || '') !== String(f.restaurant)) return false;
+      if (f.type && f.type !== 'ALL' && String(r.requestType || '') !== String(f.type)) return false;
+      if (f.status && f.status !== 'ALL' && String(r.status || '') !== String(f.status)) return false;
+      if (search) {
+        var text = [r.requestType, r.employeeName, r.supplyType, r.issuerNotes, r.restaurantCode, r.status].join(' ').toLowerCase();
+        if (text.indexOf(search) === -1) return false;
+      }
+      return true;
+    });
+    rows.sort(function(a, b) {
+      return new Date(b.createdAt || b.submittedAt || 0).getTime() - new Date(a.createdAt || a.submittedAt || 0).getTime();
+    });
+    var limit = String(f.limit || '50');
+    if (limit !== 'ALL') rows = rows.slice(0, Number(limit) || 50);
+    return rows;
+  }
+
+  function relatedSummary(r) {
+    if (String(r.requestType || '') === 'JOB_LETTER') {
+      return r.employeeName || r.letterType || '-';
+    }
+    if (String(r.requestType || '') === 'OFFICE_SUPPLIES') {
+      return r.supplyType || '-';
+    }
+    return r.employeeName || r.supplyType || '-';
+  }
+
+  function requestTypeLabel(type) {
+    if (String(type || '') === 'JOB_LETTER') return 'Job Letter';
+    if (String(type || '') === 'OFFICE_SUPPLIES') return 'Office Supplies';
+    return type || '-';
+  }
+
+  function requestTable(rows) {
+    if (!rows.length) return '<div class="arc-empty">No admin requests found.</div>';
+    var html = '<table class="arc-table compact"><thead><tr><th>Request Date</th><th>Request Type</th><th>Restaurant</th><th>Related</th><th>Issuer Notes</th><th class="arc-status-col">Status</th><th>Actions</th></tr></thead><tbody>';
+    rows.forEach(function(r) {
+      var open = arState.openRequestId === String(r.requestId || '');
+      var status = String(r.status || 'New Request');
+      var type = String(r.requestType || '');
+      var isNew = status === 'New Request';
+      var isCompleted = status === 'Completed';
+      var isReceived = status === 'Received';
+      var isCancelled = status === 'Cancelled';
+      var actions = '';
+      if (isNew) {
+        actions += '<button class="arc-btn arc-save-mini" type="button" data-arc-edit="' + attr(r.requestId) + '">Edit</button> ';
+        actions += '<button class="arc-btn arc-save-mini" style="border-color:#c0392b;color:#c0392b" type="button" data-arc-cancel="' + attr(r.requestId) + '">Cancel</button>';
+      }
+      if (isCompleted && type === 'JOB_LETTER') {
+        var atts = Array.isArray(r.attachments) ? r.attachments : [];
+        actions += atts.length
+          ? '<a class="arc-btn arc-save-mini primary" href="' + attr(atts[atts.length-1].url||'') + '" target="_blank" style="text-decoration:none;display:inline-flex;align-items:center">&#x2B07; Download</a>'
+          : '<span style="font-size:12px;color:#888">Awaiting upload</span>';
+      }
+      if (isCompleted) {
+        actions += '<button class="arc-btn arc-save-mini primary" type="button" data-arc-received="' + attr(r.requestId) + '">Mark as Received</button>';
+      }
+      if (isReceived) actions += '<span style="font-size:12px;color:#1e8449;font-weight:700">&#x2713; Received</span>';
+      if (isCancelled) actions += '<span style="font-size:12px;color:#888">Cancelled</span>';
+      html += '<tr class="arc-row" data-arc-open="' + attr(r.requestId) + '">' +
+        '<td>' + esc(formatDateTime(r.createdAt || r.submittedAt)) + '</td>' +
+        '<td>' + esc(requestTypeLabel(type)) + '</td>' +
+        '<td>' + esc(r.restaurantCode || r.restaurantNumber || r.restaurantId || '-') + '</td>' +
+        '<td>' + esc(relatedSummary(r)) + '</td>' +
+        '<td><div class="arc-note-readonly">' + esc(r.issuerNotes || '-') + '</div></td>' +
+        '<td class="arc-status-col"><span class="arc-badge' + (isCompleted||isReceived?' completed':isCancelled?' cancelled':'') + '">' + esc(status) + '</span></td>' +
+        '<td style="white-space:nowrap"><div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">' + actions +
+          '<button class="arc-btn arc-view-btn" type="button" data-arc-view="' + attr(r.requestId) + '">' + (open ? 'Close' : 'View') + '</button>' +
+        '</div></td>' +
+      '</tr>';
+      if (open) {
+        html += '<tr><td colspan="7"><div class="arc-detail">' + detailHtml(r) + '</div></td></tr>';
+      }
+    });
+    html += '</tbody></table>';
+    return html;
+  }
+
+  function detailHtml(r) {
+    var history = Array.isArray(r.statusHistory) ? r.statusHistory : [];
+    var status = String(r.status || 'New Request');
+    var type = String(r.requestType || '');
+    var terminal = isTerminalStatus_(status);
+    var attachments = Array.isArray(r.attachments) ? r.attachments : [];
+
+    var html = '<div class="arc-detail-grid">' +
+      detailLine('Request ID', r.requestId) +
+      detailLine('Restaurant', (r.restaurantCode || r.restaurantNumber || r.restaurantId || '-')) +
+      detailLine('Request Type', requestTypeLabel(type)) +
+      detailLine('Current Status', status) +
+      detailLine('Submitted', formatDateTime(r.createdAt || r.submittedAt));
+
+    if (type === 'JOB_LETTER') {
+      html +=
+        detailLine('Letter Type', r.letterType) +
+        detailLine('Employee Name', r.employeeName) +
+        detailLine('Employee Status', r.employeeStatus) +
+        detailLine('Gender', r.gender) +
+        detailLine('Position', r.manualPosition || r.position) +
+        detailLine('Full time or Part time', r.employmentType) +
+        detailLine('Started Date', formatDate(r.startedDate));
+    }
+    if (type === 'OFFICE_SUPPLIES') {
+      html +=
+        detailLine('Supply Type', r.supplyType) +
+        detailLine('Supplies Needed', r.supplyDetails);
+    }
+
+    html += detailLine('Issuer Notes', r.issuerNotes || '-');
+
+    if (!terminal) {
+      html += '<div class="arc-detail-label">Admin Notes</div><div><textarea class="arc-textarea" id="arcNote_' + attr(r.requestId) + '" data-arc-note-input="' + attr(r.requestId) + '">' + esc(r.adminNotes || '') + '</textarea></div>';
+      html += '<div></div><div class="arc-inline-actions">';
+      html += '<select class="arc-select arc-status-select" id="arcDetailStatus_' + attr(r.requestId) + '" data-arc-status-select="' + attr(r.requestId) + '" data-original-status="' + attr(status) + '">';
+      html += '<option' + (status === 'New Request' ? ' selected' : '') + '>New Request</option>';
+      html += '<option' + (status === 'Completed' ? ' selected' : '') + '>Completed</option>';
+      html += '</select>';
+      html += '<button class="arc-btn primary arc-save-mini arc-save-hidden" type="button" data-arc-save="' + attr(r.requestId) + '">Save</button>';
+      html += '</div>';
+    } else {
+      html += detailLine('Admin Notes', r.adminNotes || '-');
+    }
+
+    html += '</div>';
+
+    if (status === 'Completed' && type === 'JOB_LETTER' && attachments.length) {
+      html += '<div style="margin:10px 0;padding:10px;background:#e8f5e9;border:1px solid #a5d6a7;border-radius:3px">' +
+        '<strong style="color:#1b5e20">Letter ready for download:</strong> ' +
+        attachments.map(function(att) {
+          return '<a href="' + esc(att.url||'') + '" target="_blank" style="color:#1565c0;font-weight:700">&#x2B07; ' + esc(att.name||'Download Letter') + '</a>';
+        }).join(' &nbsp; ') + '</div>';
+    }
+    if (status === 'Completed') {
+      html += '<div style="margin:10px 0;padding:10px;background:#fff3e0;border:1px solid #ffcc80;border-radius:3px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">' +
+        '<span style="color:#e65100">Admin completed this request. Please confirm once you received it.</span>' +
+        '<button class="arc-btn primary" type="button" data-arc-received="' + attr(r.requestId) + '">Mark as Received</button>' +
+      '</div>';
+    }
+
+    html +=
+      '<div class="arc-more-bar"><button class="arc-btn" type="button" data-arc-history-toggle="' + attr(r.requestId) + '">View History</button></div>' +
+      '<div class="arc-history is-hidden" id="arcHistoryBox_' + attr(r.requestId) + '"><strong>Status History</strong>' +
+      (history.length ? history.map(function(h) {
+        return '<div class="arc-history-item">' + esc((h.status || h.action || '-') + ' | ' + formatDateTime(h.at || h.date || '')) + '<br><small>' + esc(h.by || '') + (h.note ? ' | ' + h.note : '') + '</small></div>';
+      }).join('') : '<div class="arc-empty">No status changes yet.</div>') + '</div>';
+
+    return html;
+  }
+
+  function detailLine(label, value) {
+    return '<div class="arc-detail-label">' + esc(label) + '</div><div>' + esc(value || '-') + '</div>';
+  }
+
+  function updateLocalRequestAfterSave(requestId, status, note) {
+    var rows = requests();
+    var row = rows.find(function(item) { return String(item.requestId || '') === String(requestId || ''); });
+    if (!row) return;
+    var nowText = new Date().toISOString();
+    row.status = status;
+    row.adminNotes = note;
+    row.statusUpdatedAt = nowText;
+    row.statusHistory = Array.isArray(row.statusHistory) ? row.statusHistory : [];
+    row.statusHistory.push({ at: nowText, by: 'Current user', status: status, note: note });
+  }
+
+  function saveRequestStatus(requestId) {
+    var detailStatus = byId('arcDetailStatus_' + requestId);
+    var status = (detailStatus || byId('arcStatus_' + requestId) || {}).value || 'New Request';
+    var note = (byId('arcNote_' + requestId) || {}).value || '';
+    var saveButtons = Array.prototype.slice.call(document.querySelectorAll('[data-arc-save="' + requestId + '"]'));
+    saveButtons.forEach(function(button) { setSavingButton(button, true, 'Save'); });
+    updateLocalRequestAfterSave(requestId, status, note);
+    renderManageRequests();
+    notify('Saving in background...', 'info');
+    google.script.run
+      .withSuccessHandler(function(response) {
+        if (!response || !response.success) {
+          notify((response && response.error) || 'Status could not be saved. Please refresh and try again.', 'error');
+          return;
+        }
+        notify('Request status saved.', 'success');
+      })
+      .withFailureHandler(function(error) {
+        notify(error && error.message ? error.message : 'Status could not be saved. Please refresh and try again.', 'error');
+      })
+      .updateAdminRequestStatus({ sessionToken: token_(), requestId: requestId, status: status, adminNotes: note });
+  }
+
+  function formatDate(value) {
+    if (!value) return '';
+    var date = new Date(value);
+    if (isNaN(date.getTime())) return String(value);
+    return date.toLocaleDateString();
+  }
+
+  function formatDateTime(value) {
+    if (!value) return '';
+    var date = new Date(value);
+    if (isNaN(date.getTime())) return String(value);
+    return date.toLocaleString();
+  }
+
+  function exportRequestsCsv() {
+    var rows = getFilteredRequests();
+    if (!rows.length) return notify('No records to export.', 'error');
+    var csvRows = [['Request Date', 'Request Type', 'Restaurant Number', 'Related', 'Issuer Notes', 'Status']].concat(rows.map(function(r) {
+      return [formatDateTime(r.createdAt), requestTypeLabel(r.requestType), r.restaurantCode || r.restaurantId || '', relatedSummary(r), r.issuerNotes || '', r.status || ''];
+    }));
+    var csv = csvRows.map(function(row) {
+      return row.map(function(cell) { return '"' + String(cell == null ? '' : cell).replace(/"/g, '""') + '"'; }).join(',');
+    }).join('\n');
+    var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'admin-requests.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function openAdminRequestPage() {
+    injectStyle();
+    showWorkspace();
+    bindEvents();
+    renderToolbar();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    loadData();
+  }
+
+  function renameRoleActionLabels() {
+    document.querySelectorAll('[data-action-key], [data-role-action-key], [data-role-action], [data-action], [data-key]').forEach(function(el) {
+      var key =
+        el.getAttribute('data-action-key') ||
+        el.getAttribute('data-role-action-key') ||
+        el.getAttribute('data-role-action') ||
+        el.getAttribute('data-action') ||
+        el.getAttribute('data-key') ||
+        '';
+
+      if (key === 'RESTAURANT_REQUEST') el.textContent = 'Admin Request';
+      if (key === 'RECRUITMENT_REQUESTS') el.textContent = 'Restaurant Request';
+    });
+  }
+
+  // v250 disabled old Admin Request capture click patch. Main router opens clean page now.
+  document.addEventListener('click', function(event) { return; }, true);
+
+  document.addEventListener('DOMContentLoaded', renameRoleActionLabels);
+  // v250 disabled repeated label timer for smoother app.
+  // setInterval(renameRoleActionLabels, 1500);
+
+  window.openAdminRequestPage = openAdminRequestPage;
+})();
+
+
+
+
+
+
+/* v250 Admin Request cleanup
+   Clean route only. Uses Requests Admin, Team Members, and Restaurants.
+   No old popup. No document click patch. No repeated timer.
+*/
+(function adminRequestCleanV250() {
+  var arState = {
+    tab: 'jobLetter',
+    loading: false,
+    restaurants: [],
+    employees: [],
+    requests: [],
+    openId: '',
+    managePage: 1,
+    managePageSize: 10,
+    filters: {
+      status: 'OPEN',
+      type: 'ALL',
+      restaurant: 'ALL',
+      search: ''
+    }
+  };
+
+  function byId(id) { return document.getElementById(id); }
+
+  function safeText(value) { return String(value == null ? '' : value); }
+
+  function esc(value) {
+    return safeText(value).replace(/[&<>"']/g, function(ch) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch];
+    });
+  }
+
+  function attr(value) { return esc(value).replace(/`/g, '&#096;'); }
+
+  function token_() {
+    try { if (typeof getSessionToken_ === 'function') return getSessionToken_(); } catch (error) {}
+    try { return sessionStorage.getItem('portalSessionToken') || ''; } catch (error2) {}
+    return '';
+  }
+
+  function toast(message, type) {
+    if (typeof showToast === 'function') showToast(message, type || 'info');
+    else if (typeof appAlertV413 === 'function') appAlertV413(message, type || 'info'); else console.log(message);
+  }
+
+  function normalizeStatus(value) {
+    var status = safeText(value || 'New Request').trim();
+    return status || 'New Request';
+  }
+
+  function isCompleted(value) {
+    var st = normalizeStatus(value).toLowerCase();
+    return st === 'received' || st === 'cancelled' || st === 'rejected';
+  }
+
+  function getRestaurantId(row) {
+    return safeText(row.restaurantId || row.restaurant_id || row.id || row.restaurant_code || row.restaurantCode || row.restaurant_number || row.restaurantNumber).trim();
+  }
+
+  function getRestaurantNumber(row) {
+    return safeText(row.restaurantNumber || row.restaurant_number || row.restaurantCode || row.restaurant_code || row.code || row.number).trim();
+  }
+
+  function getRestaurantName(row) {
+    return safeText(row.restaurantName || row.restaurant_name || row.name || '').trim();
+  }
+
+  function normalizeRestaurants(rows) {
+    var seen = {};
+    return (Array.isArray(rows) ? rows : []).map(function(row) {
+      var id = getRestaurantId(row);
+      var number = getRestaurantNumber(row);
+      var name = getRestaurantName(row);
+      if (!id && number) id = number;
+      if (!id && number) id = 'REST_' + number;
+      return { id: id, number: number, name: name };
+    }).filter(function(row) {
+      if (!row.id || !row.number) return false;
+      var key = row.id + '|' + row.number;
+      if (seen[key]) return false;
+      seen[key] = true;
+      return true;
+    }).sort(function(a, b) {
+      return String(a.number).localeCompare(String(b.number), undefined, { numeric: true });
+    });
+  }
+
+  // Statuses that make an employee ineligible for job letter requests
+  var INACTIVE_EMP_STATUSES = ['INACTIVE','ARCHIVED','QUIT','DID NOT SHOW UP','DIDNT SHOW UP','TERMINATED','DEACTIVATED'];
+  function isActiveEmployee(status) {
+    return INACTIVE_EMP_STATUSES.indexOf(String(status || '').toUpperCase().trim()) === -1;
+  }
+
+  function normalizeEmployees(rows) {
+    return (Array.isArray(rows) ? rows : []).map(function(row) {
+      var id = safeText(row.teamMemberId || row.employeeId || row.employee_id || row.team_member_id || row.id).trim();
+      var name = safeText(row.name || row.fullName || row.full_name || row.employeeName || row.employee_name).trim();
+      var restaurantNumber = safeText(row.restaurantNumber || row.restaurant_number || row.restaurantCode || row.restaurant_code || row.restaurantCodes || '').trim();
+      return {
+        id: id || name,
+        name: name,
+        status: safeText(row.status || '').trim(),
+        position: safeText(row.jobTitle || row.job_title || row.position || '').trim(),
+        employmentType: safeText(row.employmentType || row.employment_type || '').trim(),
+        hiredDate: safeText(row.hiredDate || row.hire_date || row.hired_date || '').trim(),
+        restaurantNumber: restaurantNumber
+      };
+    }).filter(function(row) { return row.name; }).sort(function(a, b) { return a.name.localeCompare(b.name); });
+  }
+
+  // Active-only employee list for job letter dropdown
+  function activeEmployeeOptions(selected) {
+    var html = '<option value="">Select employee</option>';
+    arState.employees.filter(function(e) { return isActiveEmployee(e.status); }).forEach(function(e) {
+      html += '<option value="' + attr(e.id) + '"' + (String(selected || '') === String(e.id) ? ' selected' : '') + '>' + esc(e.name) + '</option>';
+    });
+    return html;
+  }
+
+  function parseJsonObjectFromText_(value) {
+    var text = safeText(value).trim();
+    if (!text) return null;
+    if (text.charAt(0) !== '{' && text.charAt(0) !== '[') return null;
+    try {
+      var parsed = JSON.parse(text);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function findPayloadJsonInRow_(row) {
+    row = row || {};
+
+    var direct = parseJsonObjectFromText_(row.requestPayloadJson || row.request_payload_json || row.payload_json || row.payloadJson);
+    if (direct) return direct;
+
+    var keys = Object.keys(row);
+    for (var i = 0; i < keys.length; i += 1) {
+      var parsed = parseJsonObjectFromText_(row[keys[i]]);
+      if (parsed && (parsed.supplyType || parsed.supplyDetails || parsed.letterType || parsed.employeeName || parsed.requestType || parsed.restaurantId)) {
+        return parsed;
+      }
+    }
+
+    return {};
+  }
+
+  function cleanPossibleJsonText_(value, fallback) {
+    var text = safeText(value).trim();
+    if (!text) return fallback || '';
+    if (parseJsonObjectFromText_(text)) return fallback || '';
+    return text;
+  }
+
+  function cleanDateValue_(value) {
+    var text = cleanPossibleJsonText_(value, '');
+    if (!text) return '';
+    var date = new Date(text);
+    if (isNaN(date.getTime())) return text;
+    return text;
+  }
+
+  function normalizeRequestType_(row, payload) {
+    var type = safeText(row.requestType || row.request_type || payload.requestType || payload.request_type || '').trim();
+
+    if (!type && (payload.supplyType || payload.supplyDetails || row.supplyType || row.supply_type || row.supplyDetails || row.supply_details)) {
+      type = 'OFFICE_SUPPLIES';
+    }
+
+    if (!type && (payload.letterType || row.letterType || row.letter_type || payload.employeeName || row.employeeName || row.employee_name)) {
+      type = 'JOB_LETTER';
+    }
+
+    if (type === 'OFFICE_SUPPLIES_REQUEST') type = 'OFFICE_SUPPLIES';
+    if (type === 'JOB_LETTER_REQUEST') type = 'JOB_LETTER';
+
+    return type;
+  }
+
+  function normalizeRequests(rows) {
+    return (Array.isArray(rows) ? rows : []).map(function(row) {
+      row = row || {};
+      var payload = findPayloadJsonInRow_(row);
+
+      var restaurantNumber = safeText(
+        row.restaurantNumber ||
+        row.restaurant_number ||
+        row.restaurantCode ||
+        row.restaurant_code ||
+        payload.restaurantNumber ||
+        payload.restaurant_number ||
+        ''
+      ).trim();
+
+      var restaurantId = safeText(
+        row.restaurantId ||
+        row.restaurant_id ||
+        payload.restaurantId ||
+        payload.restaurant_id ||
+        ''
+      ).trim();
+
+      if (!restaurantNumber && restaurantId) {
+        var match = arState.restaurants.filter(function(rest) {
+          return String(rest.id || '') === restaurantId || String(rest.number || '') === restaurantId;
+        })[0];
+        restaurantNumber = match ? match.number : restaurantId.replace(/^REST[_-]?/i, '');
+      }
+
+      var type = normalizeRequestType_(row, payload);
+
+      var requestId = safeText(
+        row.requestId ||
+        row.request_id ||
+        row.id ||
+        payload.requestId ||
+        payload.request_id ||
+        ''
+      ).trim();
+
+      var createdAt = cleanDateValue_(
+        row.createdAt ||
+        row.submittedAt ||
+        row.submitted_at ||
+        row.created_at ||
+        row.requestDate ||
+        row.request_date ||
+        ''
+      );
+
+      var supplyType = cleanPossibleJsonText_(row.supplyType || row.supply_type, payload.supplyType || payload.supply_type || '');
+      var supplyDetails = cleanPossibleJsonText_(row.supplyDetails || row.supply_details, payload.supplyDetails || payload.supply_details || '');
+      var issuerNotes = cleanPossibleJsonText_(row.issuerNotes || row.issuer_notes || row.notes, payload.issuerNotes || payload.issuer_notes || payload.notes || '');
+
+      if (!issuerNotes && supplyDetails) issuerNotes = supplyDetails;
+
+      var statusHistory = [];
+      if (Array.isArray(row.statusHistory)) statusHistory = row.statusHistory;
+      else if (Array.isArray(row.status_history)) statusHistory = row.status_history;
+      else {
+        var parsedHistory = parseJsonObjectFromText_(row.status_history_json || row.statusHistoryJson || '');
+        statusHistory = Array.isArray(parsedHistory) ? parsedHistory : [];
+      }
+
+      return {
+        requestId: requestId,
+        requestType: type,
+        restaurantId: restaurantId,
+        restaurantNumber: restaurantNumber,
+        createdAt: createdAt,
+        status: normalizeStatus(row.status || payload.status || 'New Request'),
+        letterType: cleanPossibleJsonText_(row.letterType || row.letter_type, payload.letterType || payload.letter_type || ''),
+        employeeId: cleanPossibleJsonText_(row.employeeId || row.employee_id, payload.employeeId || payload.employee_id || ''),
+        employeeName: cleanPossibleJsonText_(row.employeeName || row.employee_name, payload.employeeName || payload.employee_name || ''),
+        employeeStatus: cleanPossibleJsonText_(row.employeeStatus || row.employee_status, payload.employeeStatus || payload.employee_status || ''),
+        gender: cleanPossibleJsonText_(row.gender, payload.gender || ''),
+        position: cleanPossibleJsonText_(row.manualPosition || row.manual_position || row.position, payload.manualPosition || payload.manual_position || payload.position || ''),
+        employmentType: cleanPossibleJsonText_(row.employmentType || row.employment_type, payload.employmentType || payload.employment_type || ''),
+        startedDate: cleanPossibleJsonText_(row.startedDate || row.started_date, payload.startedDate || payload.started_date || ''),
+        supplyType: supplyType,
+        supplyDetails: supplyDetails,
+        issuerNotes: issuerNotes,
+        adminNotes: cleanPossibleJsonText_(row.adminNotes || row.admin_notes, payload.adminNotes || payload.admin_notes || ''),
+        attachments: Array.isArray(row.attachments) ? row.attachments : (Array.isArray(row.attachments_json) ? row.attachments_json : []),
+        statusHistory: statusHistory
+      };
+    }).filter(function(row) { return row.requestId; });
+  }
+
+  function injectStyle() {
+    if (byId('adminRequestCleanStyleV250')) return;
+    var style = document.createElement('style');
+    style.id = 'adminRequestCleanStyleV250';
+    style.textContent = '' +
+      '.ar-page{width:100%;min-height:calc(100vh - 130px);background:#f4f4f4;border:1px solid #bdbdbd;font-family:Arial,sans-serif;box-shadow:0 12px 32px rgba(15,23,42,.12)}' +
+      '.ar-head{height:56px;background:#0076b6;color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 18px;box-sizing:border-box}' +
+      '.ar-head h3{font-size:24px;font-weight:400;margin:0}' +
+      '.ar-back{height:36px;border:1px solid rgba(255,255,255,.55);background:rgba(255,255,255,.12);color:#fff;border-radius:3px;padding:0 14px;font-weight:700;cursor:pointer}' +
+      '.ar-tabs{height:54px;display:flex;background:#e5e5e5;border-bottom:1px solid #bdbdbd;overflow:hidden}' +
+      '.ar-tab{width:220px;min-width:220px;max-width:220px;border:0;border-right:1px solid #c8c8c8;background:#e5e5e5;color:#111;font-size:16px;font-weight:800;cursor:pointer}' +
+      '.ar-tab.active{background:#fff;border-bottom:3px solid #0076b6}' +
+      '.ar-content{padding:14px;box-sizing:border-box}' +
+      '.ar-box{background:#fff;border:1px solid #d8d8d8;margin-bottom:14px}' +
+      '.ar-title{background:#f2f6f9;border-bottom:1px solid #d8d8d8;padding:10px 14px;font-weight:800;color:#18324a}' +
+      '.ar-form{display:grid;grid-template-columns:1fr 1fr;gap:12px 24px;padding:14px 18px 16px}' +
+      '.ar-field{display:grid;grid-template-columns:180px minmax(180px,1fr);gap:8px;align-items:center}' +
+      '.ar-field.full{grid-column:1/-1;align-items:start}' +
+      '.ar-field label{font-weight:700;text-align:right;font-size:.92rem;color:#222}' +
+      '.ar-input,.ar-select,.ar-textarea{width:100%;min-height:36px;border:1px solid #9d9d9d;background:#fff;padding:6px 8px;font:inherit;border-radius:2px;box-sizing:border-box}' +
+      '.ar-textarea{min-height:76px;resize:vertical}' +
+      '.ar-readonly{background:#f5f5f5;color:#444}' +
+      '.ar-actions{grid-column:1/-1;display:flex;justify-content:flex-end;gap:8px;padding-top:4px}' +
+      '.ar-btn{height:36px;min-width:92px;border:1px solid #8c8c8c;background:#f7f7f7;color:#111;border-radius:2px;font-weight:700;cursor:pointer;padding:0 12px;white-space:nowrap}' +
+      '.ar-btn.primary{background:#0076b6;border-color:#0076b6;color:#fff}' +
+      '.ar-btn.small{height:32px;min-width:70px;padding:0 10px;font-size:.86rem}' +
+      '.ar-filters{display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:10px;padding:12px;background:#f7f7f7;border-bottom:1px solid #ddd}' +
+      '.ar-table-wrap{overflow:auto;max-height:560px}' +
+      '.ar-pager{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border-top:1px solid #ddd;background:#fafafa;flex-wrap:wrap}' +
+      '.ar-pager-info{font-size:.9rem;color:#444;font-weight:700}' +
+      '.ar-pager-actions{display:flex;gap:8px;align-items:center}' +
+      '.ar-btn:disabled{opacity:.45;cursor:not-allowed}' +
+      '.ar-table{width:100%;border-collapse:collapse;font-size:.92rem}' +
+      '.ar-table th{position:sticky;top:0;background:#ebebeb;border:1px solid #cfcfcf;text-align:left;padding:8px;z-index:1}' +
+      '.ar-table td{border:1px solid #ddd;padding:8px;vertical-align:top}' +
+      '.ar-badge{display:inline-flex;align-items:center;border-radius:999px;padding:3px 10px;font-size:.8rem;font-weight:800;background:#e9f2ff;color:#075a9c;border:1px solid #b9d7ff}' +
+      '.ar-badge.completed{background:#e9f8ed;color:#17622a;border-color:#bce7c5}' +
+      '.ar-detail{background:#fbfbfb;padding:12px}' +
+      '.ar-detail-grid{display:grid;grid-template-columns:220px 1fr;gap:8px 12px}' +
+      '.ar-label{font-weight:800;color:#333;text-align:right}' +
+      '.ar-inline-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}' +
+      '.ar-empty{padding:18px;text-align:center;color:#777}' +
+      '.ar-note{max-width:360px;white-space:normal;color:#333}' +
+      '.ar-history{margin-top:10px;border-top:1px solid #ddd;padding-top:8px}' +
+      '.ar-history-item{padding:6px 0;border-bottom:1px solid #eee}' +
+      '.ar-track-card{display:grid;grid-template-columns:180px 1fr;gap:10px;margin:0 0 12px 0;padding:12px;background:#f8fbff;border:1px solid #cfe4ff;border-radius:6px}' +
+      '.ar-pending{display:inline-flex;align-items:center;border-radius:999px;padding:5px 12px;font-weight:800;background:#fff6db;color:#7a4b00;border:1px solid #f4d273}' +
+      '.ar-pending.you{background:#fff0f0;color:#9b1c1c;border-color:#f0b4b4}' +
+      '.ar-pending.done{background:#e9f8ed;color:#17622a;border-color:#bce7c5}' +
+      '.ar-progress{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:4px}' +
+      '.ar-step{display:inline-flex;align-items:center;gap:5px;font-size:.78rem;font-weight:800;color:#777}' +
+      '.ar-dot{width:10px;height:10px;border-radius:50%;background:#c9c9c9;display:inline-block}' +
+      '.ar-step.done{color:#17622a}.ar-step.done .ar-dot{background:#27ae60}' +
+      '.ar-step.current{color:#075a9c}.ar-step.current .ar-dot{background:#0076b6;box-shadow:0 0 0 3px rgba(0,118,182,.14)}' +
+      '.admin-request-clearview-full{width:100%!important;max-width:none!important;align-items:stretch!important;justify-content:stretch!important;padding:0!important}'
+      + '@media(max-width:900px){.ar-form,.ar-filters{grid-template-columns:1fr}.ar-field{grid-template-columns:1fr}.ar-field label{text-align:left}.ar-detail-grid{grid-template-columns:1fr}.ar-track-card{grid-template-columns:1fr}.ar-tab{width:160px;min-width:160px;max-width:160px}.ar-table-wrap{overflow-x:auto}.ar-table{min-width:640px}}'
+      + '@media(max-width:640px){.ar-tab{width:130px;min-width:130px;max-width:130px;font-size:.82rem}.ar-filters{grid-template-columns:1fr}.ar-actions{flex-wrap:wrap}.ar-btn{min-width:80px}}';
+    document.head.appendChild(style);
+  }
+
+  function renderShell() {
+    injectStyle();
+    var loginStage = document.querySelector('.login-stage');
+    var dashboardStage = document.querySelector('.dashboard-stage');
+    var centerColumn = document.querySelector('.center-column.card');
+    var adminWorkspace = byId('adminWorkspace');
+    var newsletter = document.querySelector('.newsletter');
+
+    if (loginStage) { loginStage.hidden = true; loginStage.style.display = 'none'; }
+    if (dashboardStage) { dashboardStage.hidden = false; dashboardStage.removeAttribute('hidden'); dashboardStage.style.display = 'grid'; }
+    if (adminWorkspace) { adminWorkspace.hidden = true; adminWorkspace.style.display = 'none'; }
+    if (newsletter) { newsletter.hidden = true; newsletter.style.display = 'none'; }
+    if (centerColumn) {
+      centerColumn.classList.add('admin-request-clearview-full');
+      centerColumn.classList.remove('manage-team-clearview-full');
+      centerColumn.classList.remove('recruitment-clearview-full');
+      centerColumn.innerHTML = '' +
+        '<section class="ar-page">' +
+          '<div class="ar-head"><h3>Admin Request</h3><button class="ar-back" type="button" id="arBackBtn">Back to Dashboard</button></div>' +
+          '<div class="ar-tabs">' +
+            tabButton('jobLetter', 'Job Letter') +
+            tabButton('officeSupplies', 'Office Supplies') +
+            tabButton('manageRequests', 'Manage Requests') +
+          '</div>' +
+          '<div class="ar-content" id="arContent">' + loadingHtml() + '</div>' +
+        '</section>';
+    }
+    bindShellEvents();
+  }
+
+  function tabButton(key, label) {
+    return '<button class="ar-tab' + (arState.tab === key ? ' active' : '') + '" type="button" data-ar-tab="' + attr(key) + '">' + esc(label) + '</button>';
+  }
+
+  function loadingHtml() { return '<div class="ar-box"><div class="ar-empty">Loading...</div></div>'; }
+
+  function backToDashboard() {
+    try { if (typeof goBackToDashboardHome === 'function') return goBackToDashboardHome(); } catch (error) {}
+    try { if (window.goBackToDashboardHome) return window.goBackToDashboardHome(); } catch (error2) {}
+    location.reload();
+  }
+
+  function bindShellEvents() {
+    var back = byId('arBackBtn');
+    if (back) back.onclick = backToDashboard;
+    Array.prototype.forEach.call(document.querySelectorAll('[data-ar-tab]'), function(button) {
+      button.onclick = function() {
+        arState.tab = button.getAttribute('data-ar-tab') || 'jobLetter';
+        arState.openId = '';
+        renderShell();
+        renderContent();
+      };
+    });
+  }
+
+  function loadData(callback) {
+    arState.loading = true;
+    renderContent();
+    google.script.run
+      .withSuccessHandler(function(response) {
+        arState.loading = false;
+        var data = response && response.data ? response.data : response || {};
+        arState.restaurants = normalizeRestaurants(data.restaurants || []);
+        arState.employees = normalizeEmployees(data.employees || data.teamMembers || []);
+        arState.requests = normalizeRequests(data.requests || data.adminRequests || []);
+        renderContent();
+        if (typeof callback === 'function') callback();
+      })
+      .withFailureHandler(function(error) {
+        arState.loading = false;
+        renderError(error && error.message ? error.message : 'Could not load Admin Request data.');
+      })
+      .getAdminRequestWorkspaceData(token_());
+  }
+
+  function renderError(message) {
+    var content = byId('arContent');
+    if (content) content.innerHTML = '<div class="ar-box"><div class="ar-empty">' + esc(message) + '</div></div>';
+  }
+
+  function renderContent() {
+    var content = byId('arContent');
+    if (!content) return;
+    if (arState.loading) { content.innerHTML = loadingHtml(); return; }
+    if (arState.tab === 'officeSupplies') content.innerHTML = officeSuppliesHtml();
+    else if (arState.tab === 'manageRequests') content.innerHTML = manageRequestsHtml();
+    else content.innerHTML = jobLetterHtml();
+    bindContentEvents();
+  }
+
+  function restaurantOptions(selected) {
+    var html = '<option value="">Select restaurant</option>';
+    arState.restaurants.forEach(function(r) {
+      var label = r.number + (r.name ? ' | ' + r.name : '');
+      html += '<option value="' + attr(r.id) + '" data-number="' + attr(r.number) + '"' + (String(selected || '') === String(r.id) ? ' selected' : '') + '>' + esc(label) + '</option>';
+    });
+    return html;
+  }
+
+  function employeeOptions(selected) {
+    var html = '<option value="">Select employee</option>';
+    arState.employees.forEach(function(e) {
+      html += '<option value="' + attr(e.id) + '"' + (String(selected || '') === String(e.id) ? ' selected' : '') + '>' + esc(e.name) + '</option>';
+    });
+    return html;
+  }
+
+  function jobLetterHtml() {
+    return '<div class="ar-box">' +
+      '<div class="ar-title">Job Letter</div>' +
+      '<form class="ar-form" id="arJobLetterForm">' +
+        fieldSelect('Restaurant', 'arJlRestaurant', restaurantOptions('')) +
+        fieldSelect('Type of Letter', 'arJlLetterType', '<option value="">Select type</option><option>Job letter with job description</option><option>Standard Job Letter</option><option>OHIP</option>') +
+        fieldSelect('Employee Name', 'arJlEmployee', activeEmployeeOptions('')) +
+        fieldInput('Employee Status', 'arJlEmployeeStatus', '', true) +
+        fieldSelect('Gender', 'arJlGender', '<option value="">Select gender</option><option>Male</option><option>Female</option><option>Preferred to be called They</option>') +
+        fieldSelect('Position', 'arJlPosition', '<option value="">Select position</option><option>Team Member</option><option>Supervisor</option><option>Assistant Manager</option><option>Manager</option><option>Other</option>') +
+        fieldInput('If Other Position', 'arJlManualPosition', '', false) +
+        fieldSelect('Team Member Status', 'arJlEmploymentType', '<option value="">Select status</option><option>Full-time</option><option>Part-time</option>') +
+        fieldInput('Started Working', 'arJlStartedDate', '', false, 'date') +
+        fieldTextarea('Other Notes', 'arJlNotes') +
+        '<div class="ar-actions"><button class="ar-btn" type="button" id="arJobClear">Clear</button><button class="ar-btn primary" type="submit" id="arJobSubmit">Submit</button></div>' +
+      '</form>' +
+    '</div>';
+  }
+
+  function officeSuppliesHtml() {
+    return '<div class="ar-box">' +
+      '<div class="ar-title">Office Supplies</div>' +
+      '<form class="ar-form" id="arSupplyForm">' +
+        fieldSelect('Restaurant', 'arSupRestaurant', restaurantOptions('')) +
+        fieldSelect('Request Type', 'arSupType', '<option value="">Select request type</option><option>Bank books</option><option>Toner</option><option>Printing Paper</option>') +
+        fieldTextarea('Supplies Needed', 'arSupDetails', 'Please specify your office supplies need. For toner, mention printer model and toner or cartridge number.') +
+        fieldTextarea('Other Notes', 'arSupNotes') +
+        '<div class="ar-actions"><button class="ar-btn" type="button" id="arSupClear">Clear</button><button class="ar-btn primary" type="submit" id="arSupSubmit">Submit</button></div>' +
+      '</form>' +
+    '</div>';
+  }
+
+  function fieldInput(label, id, value, readonly, type) {
+    return '<div class="ar-field"><label for="' + attr(id) + '">' + esc(label) + '</label><input class="ar-input' + (readonly ? ' ar-readonly' : '') + '" id="' + attr(id) + '" type="' + attr(type || 'text') + '" value="' + attr(value || '') + '"' + (readonly ? ' readonly' : '') + '></div>';
+  }
+
+  function fieldSelect(label, id, options) {
+    return '<div class="ar-field"><label for="' + attr(id) + '">' + esc(label) + '</label><select class="ar-select" id="' + attr(id) + '">' + options + '</select></div>';
+  }
+
+  function fieldTextarea(label, id, placeholder) {
+    return '<div class="ar-field full"><label for="' + attr(id) + '">' + esc(label) + '</label><textarea class="ar-textarea" id="' + attr(id) + '" placeholder="' + attr(placeholder || '') + '"></textarea></div>';
+  }
+
+  function manageRequestsHtml() {
+    var rows = filteredRequests();
+    var total = rows.length;
+    var pageSize = arState.managePageSize || 10;
+    var totalPages = Math.max(1, Math.ceil(total / pageSize));
+    arState.managePage = Math.min(Math.max(1, arState.managePage || 1), totalPages);
+    var start = (arState.managePage - 1) * pageSize;
+    var pageRows = rows.slice(start, start + pageSize);
+    return '<div class="ar-box">' +
+      '<div class="ar-title">Manage Requests</div>' +
+      '<div class="ar-filters">' +
+        '<select class="ar-select" id="arFilterStatus"><option value="OPEN">My Open Requests</option><option value="WAITING_ME">Waiting for Me</option><option value="WAITING_ADMIN">Waiting for Admin</option><option value="COMPLETED">Completed</option><option value="ALL">All Status</option></select>' +
+        '<select class="ar-select" id="arFilterType"><option value="ALL">All Types</option><option value="JOB_LETTER">Job Letter</option><option value="OFFICE_SUPPLIES">Office Supplies</option></select>' +
+        '<input class="ar-input" id="arFilterSearch" type="text" placeholder="Search" value="' + attr(arState.filters.search) + '">' +
+        '<button class="ar-btn primary" id="arApplyFilters" type="button">Apply</button>' +
+      '</div>' +
+      '<div class="ar-table-wrap">' + requestsTable(pageRows) + '</div>' +
+      managePagerHtml(total, start, pageRows.length, totalPages) +
+    '</div>';
+  }
+
+  function managePagerHtml(total, start, count, totalPages) {
+    if (!total) return '';
+    var from = start + 1;
+    var to = start + count;
+    return '<div class="ar-pager">' +
+      '<div class="ar-pager-info">Showing ' + esc(from) + ' to ' + esc(to) + ' of ' + esc(total) + ' requests</div>' +
+      '<div class="ar-pager-actions">' +
+        '<button class="ar-btn small" type="button" data-ar-page="prev"' + (arState.managePage <= 1 ? ' disabled' : '') + '>Prev</button>' +
+        '<span class="ar-pager-info">Page ' + esc(arState.managePage) + ' of ' + esc(totalPages) + '</span>' +
+        '<button class="ar-btn small" type="button" data-ar-page="next"' + (arState.managePage >= totalPages ? ' disabled' : '') + '>Next</button>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function filteredRequests() {
+    var s = arState.filters;
+    return arState.requests.filter(function(r) {
+      if (s.status === 'OPEN' && isCompleted(r.status)) return false;
+      if (s.status === 'COMPLETED' && !isCompleted(r.status)) return false;
+      if (s.status === 'WAITING_ME' && pendingActionAr(r) !== 'Waiting for You') return false;
+      if (s.status === 'WAITING_ADMIN' && pendingActionAr(r) !== 'Waiting for Admin') return false;
+      if (s.type !== 'ALL' && String(r.requestType) !== s.type) return false;
+      if (s.restaurant !== 'ALL' && String(r.restaurantNumber) !== s.restaurant) return false;
+      var q = safeText(s.search).toLowerCase().trim();
+      if (q) {
+        var hay = [r.requestId, r.requestType, r.restaurantNumber, r.employeeName, r.supplyType, r.issuerNotes, r.status].join(' ').toLowerCase();
+        if (hay.indexOf(q) === -1) return false;
+      }
+      return true;
+    });
+  }
+
+  function requestsTable(rows) {
+    if (!rows.length) return '<div class="ar-empty">No requests found.</div>';
+    var html = '<table class="ar-table"><thead><tr><th>Request Date</th><th>Type</th><th>Restaurant</th><th>Related</th><th>Pending Action</th><th>Status</th><th>View</th></tr></thead><tbody>';
+    rows.forEach(function(r) {
+      var open = arState.openId === r.requestId;
+      html += '<tr>' +
+        '<td>' + esc(formatDateTime(r.createdAt)) + '</td>' +
+        '<td>' + esc(typeLabel(r.requestType)) + '</td>' +
+        '<td>' + esc(r.restaurantNumber || '-') + '</td>' +
+        '<td>' + esc(related(r)) + '</td>' +
+        '<td><span class="ar-pending' + pendingClassAr(r) + '">' + esc(pendingActionAr(r)) + '</span></td>' +
+        '<td><span class="ar-badge' + (isCompleted(r.status) ? ' completed' : '') + '">' + esc(r.status) + '</span></td>' +
+        '<td><button class="ar-btn small" type="button" data-ar-view="' + attr(r.requestId) + '">' + (open ? 'Close' : 'View') + '</button></td>' +
+      '</tr>';
+      if (open) html += '<tr><td colspan="7"><div class="ar-detail">' + requestDetailHtml(r) + '</div></td></tr>';
+    });
+    html += '</tbody></table>';
+    return html;
+  }
+
+  function requestDetailHtml(r) {
+    var history = Array.isArray(r.statusHistory) ? r.statusHistory : [];
+    var html = trackingCardAr(r) + '<div class="ar-detail-grid">' +
+      detailLine('Request ID', r.requestId) +
+      detailLine('Restaurant Number', r.restaurantNumber) +
+      detailLine('Request Type', typeLabel(r.requestType)) +
+      detailLine('Current Status', r.status);
+    if (r.requestType === 'JOB_LETTER') {
+      html += detailLine('Letter Type', r.letterType) + detailLine('Employee Name', r.employeeName) + detailLine('Employee Status', r.employeeStatus) + detailLine('Gender', r.gender) + detailLine('Position', r.position) + detailLine('Full time or Part time', r.employmentType) + detailLine('Started Date', formatDate(r.startedDate));
+    }
+    if (r.requestType === 'OFFICE_SUPPLIES') {
+      html += detailLine('Office Supply Type', r.supplyType) + detailLine('Office Supply Details', r.supplyDetails);
+    }
+    var attachments = Array.isArray(r.attachments) ? r.attachments : [];
+    html += '<div class="ar-label">Issuer Notes</div><div>' + esc(r.issuerNotes || '-') + '</div>' +
+      '<div class="ar-label">Admin Notes</div><div>' + esc(r.adminNotes || '-') + '</div>';
+
+    if (normalizeStatus(r.status).toLowerCase() === 'completed' && r.requestType === 'JOB_LETTER' && attachments.length) {
+      html += '<div class="ar-label">Job Letter</div><div>' + attachments.map(function(att) {
+        return '<a class="ar-btn primary small" href="' + esc(att.url || '') + '" target="_blank" rel="noopener">Open Letter</a>';
+      }).join(' ') + '</div>';
+    }
+
+    html += '</div>';
+    if (normalizeStatus(r.status).toLowerCase() === 'completed') {
+      html += '<div class="ar-received-box" style="margin:12px 0;padding:12px;border:1px solid #ffcc80;background:#fff3e0;border-radius:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span>Admin completed this request. Please confirm once you received it.</span><button class="ar-btn primary" type="button" data-ar-received="' + attr(r.requestId) + '">Mark Received</button></div>';
+    }
+    html += '<div class="ar-history"><strong>History</strong>' + (history.length ? history.map(function(h) { return '<div class="ar-history-item">' + esc((h.status || h.action || '-') + ' | ' + formatDateTime(h.at || h.date || '')) + '<br><small>' + esc(h.by || '') + (h.note ? ' | ' + esc(h.note) : '') + '</small></div>'; }).join('') : '<div class="ar-empty">No history found.</div>') + '</div>';
+    return html;
+  }
+
+
+  function pendingActionAr(r) {
+    var st = normalizeStatus(r.status).toLowerCase();
+    if (st === 'completed') return 'Waiting for You';
+    if (st === 'received') return 'Completed';
+    if (st === 'cancelled' || st === 'rejected') return 'Closed';
+    if (st.indexOf('waiting') !== -1 && st.indexOf('restaurant') !== -1) return 'Waiting for You';
+    if (st === 'ready to receive') return 'Waiting for You';
+    return 'Waiting for Admin';
+  }
+
+  function pendingClassAr(r) {
+    var p = pendingActionAr(r);
+    if (p === 'Completed' || p === 'Closed') return ' done';
+    if (p === 'Waiting for You') return ' you';
+    return '';
+  }
+
+  function trackingCardAr(r) {
+    return '<div class="ar-track-card">' +
+      '<div class="ar-label">Pending Action</div><div><span class="ar-pending' + pendingClassAr(r) + '">' + esc(pendingActionAr(r)) + '</span></div>' +
+      '<div class="ar-label">Progress</div><div>' + progressHtmlAr(r) + '</div>' +
+      '</div>';
+  }
+
+  function progressHtmlAr(r) {
+    var st = normalizeStatus(r.status).toLowerCase();
+    var steps = ['Submitted','Viewed','In Progress','Waiting','Completed','Received'];
+    var index = 0;
+    if (st === 'viewed') index = 1;
+    if (st.indexOf('progress') !== -1 || st.indexOf('review') !== -1) index = 2;
+    if (st.indexOf('waiting') !== -1) index = 3;
+    if (st === 'completed') index = 4;
+    if (st === 'received') index = 5;
+    return '<div class="ar-progress">' + steps.map(function(step, i) {
+      var cls = i < index ? ' done' : (i === index ? ' current' : '');
+      return '<span class="ar-step' + cls + '"><span class="ar-dot"></span>' + esc(step) + '</span>';
+    }).join('') + '</div>';
+  }
+
+  function selected(current, value) { return normalizeStatus(current) === value ? ' selected' : ''; }
+
+  function detailLine(label, value) {
+    return '<div class="ar-label">' + esc(label) + '</div><div>' + esc(value || '-') + '</div>';
+  }
+
+  function typeLabel(type) {
+    if (type === 'JOB_LETTER') return 'Job Letter';
+    if (type === 'OFFICE_SUPPLIES') return 'Office Supplies';
+    return type || '-';
+  }
+
+  function related(r) {
+    if (r.requestType === 'JOB_LETTER') return [r.employeeName, r.letterType].filter(Boolean).join(' | ') || '-';
+    if (r.requestType === 'OFFICE_SUPPLIES') return r.supplyType || r.supplyDetails || '-';
+    return '-';
+  }
+
+  function bindContentEvents() {
+    var emp = byId('arJlEmployee');
+    if (emp) emp.onchange = function() {
+      var row = arState.employees.filter(function(e) { return String(e.id) === String(emp.value); })[0] || {};
+      var status = byId('arJlEmployeeStatus');
+      if (status) status.value = row.status || '';
+    };
+
+    var jobForm = byId('arJobLetterForm');
+    if (jobForm) jobForm.onsubmit = submitJobLetter;
+    var jobClear = byId('arJobClear');
+    if (jobClear) jobClear.onclick = function() { jobForm.reset(); };
+
+    var supForm = byId('arSupplyForm');
+    if (supForm) supForm.onsubmit = submitOfficeSupply;
+    var supClear = byId('arSupClear');
+    if (supClear) supClear.onclick = function() { supForm.reset(); };
+
+    var statusFilter = byId('arFilterStatus');
+    if (statusFilter) statusFilter.value = arState.filters.status;
+    var typeFilter = byId('arFilterType');
+    if (typeFilter) typeFilter.value = arState.filters.type;
+    var apply = byId('arApplyFilters');
+    if (apply) apply.onclick = function() {
+      arState.filters.status = (byId('arFilterStatus') || {}).value || 'OPEN';
+      arState.filters.type = (byId('arFilterType') || {}).value || 'ALL';
+      arState.filters.search = (byId('arFilterSearch') || {}).value || '';
+      arState.managePage = 1;
+      arState.openId = '';
+      renderContent();
+    };
+    var search = byId('arFilterSearch');
+    if (search) search.onkeydown = function(event) { if (event.key === 'Enter') { event.preventDefault(); if (apply) apply.click(); } };
+
+    Array.prototype.forEach.call(document.querySelectorAll('[data-ar-page]'), function(button) {
+      button.onclick = function() {
+        if (button.disabled) return;
+        var direction = button.getAttribute('data-ar-page');
+        arState.managePage += direction === 'next' ? 1 : -1;
+        arState.openId = '';
+        renderContent();
+      };
+    });
+
+    Array.prototype.forEach.call(document.querySelectorAll('[data-ar-view]'), function(button) {
+      button.onclick = function() {
+        var id = button.getAttribute('data-ar-view');
+        arState.openId = arState.openId === id ? '' : id;
+        renderContent();
+      };
+    });
+
+    Array.prototype.forEach.call(document.querySelectorAll('[data-ar-save]'), function(button) {
+      button.onclick = function() { saveStatus(button.getAttribute('data-ar-save')); };
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-ar-received]'), function(button) {
+      button.onclick = function() { confirmReceived(button.getAttribute('data-ar-received')); };
+    });
+  }
+
+  function getEmployeeById(id) {
+    return arState.employees.filter(function(e) { return String(e.id) === String(id); })[0] || {};
+  }
+
+  function submitJobLetter(event) {
+    event.preventDefault();
+    var employee = getEmployeeById((byId('arJlEmployee') || {}).value || '');
+    var payload = {
+      sessionToken: token_(),
+      restaurantId: (byId('arJlRestaurant') || {}).value || '',
+      letterType: (byId('arJlLetterType') || {}).value || '',
+      employeeId: (byId('arJlEmployee') || {}).value || '',
+      employeeName: employee.name || '',
+      employeeStatus: (byId('arJlEmployeeStatus') || {}).value || employee.status || '',
+      gender: (byId('arJlGender') || {}).value || '',
+      position: (byId('arJlPosition') || {}).value || '',
+      manualPosition: (byId('arJlManualPosition') || {}).value || '',
+      employmentType: (byId('arJlEmploymentType') || {}).value || '',
+      startedDate: (byId('arJlStartedDate') || {}).value || '',
+      issuerNotes: (byId('arJlNotes') || {}).value || ''
+    };
+    setButtonSaving('arJobSubmit', true);
+    google.script.run
+      .withSuccessHandler(function(response) {
+        setButtonSaving('arJobSubmit', false);
+        if (!response || !response.success) return toast((response && response.error) || 'Could not submit request.', 'error');
+        toast('Job letter request submitted.', 'success');
+        loadData(function() { arState.tab = 'manageRequests'; renderShell(); renderContent(); });
+      })
+      .withFailureHandler(function(error) {
+        setButtonSaving('arJobSubmit', false);
+        toast(error && error.message ? error.message : 'Could not submit request.', 'error');
+      })
+      .createAdminJobLetterRequest(payload);
+  }
+
+  function submitOfficeSupply(event) {
+    event.preventDefault();
+    var payload = {
+      sessionToken: token_(),
+      restaurantId: (byId('arSupRestaurant') || {}).value || '',
+      supplyType: (byId('arSupType') || {}).value || '',
+      supplyDetails: (byId('arSupDetails') || {}).value || '',
+      issuerNotes: (byId('arSupNotes') || {}).value || ''
+    };
+    setButtonSaving('arSupSubmit', true);
+    google.script.run
+      .withSuccessHandler(function(response) {
+        setButtonSaving('arSupSubmit', false);
+        if (!response || !response.success) return toast((response && response.error) || 'Could not submit request.', 'error');
+        toast('Office supplies request submitted.', 'success');
+        loadData(function() { arState.tab = 'manageRequests'; renderShell(); renderContent(); });
+      })
+      .withFailureHandler(function(error) {
+        setButtonSaving('arSupSubmit', false);
+        toast(error && error.message ? error.message : 'Could not submit request.', 'error');
+      })
+      .createAdminOfficeSupplyRequest(payload);
+  }
+
+  function setButtonSaving(id, saving) {
+    var button = byId(id);
+    if (!button) return;
+    button.disabled = !!saving;
+    button.textContent = saving ? 'Saving…' : 'Submit';
+  }
+
+  function saveStatus(id) {
+    // Double-submit guard
+    if (typeof pendingSave_ !== 'undefined' && !pendingSave_.lock('ar_' + id)) {
+      toast('Already saving this request, please wait...', 'info');
+      return;
+    }
+    var status = (byId('arStatus_' + id) || {}).value || 'New Request';
+    var note = (byId('arNote_' + id) || {}).value || '';
+    var button = document.querySelector('[data-ar-save="' + id + '"]');
+    var statusSelect = byId('arStatus_' + id);
+    var rowEl = button && typeof findPortalRowV414 === 'function' ? findPortalRowV414(button) : null;
+    if (typeof setPortalRowSavingV414 === 'function') setPortalRowSavingV414(rowEl, true, 'Saving...');
+    if (button) { button.disabled = true; button.textContent = 'Saving…'; }
+    if (statusSelect) statusSelect.disabled = true;
+
+    var row = arState.requests.filter(function(r) { return r.requestId === id; })[0];
+    if (row) {
+      row.status = status;
+      row.adminNotes = note;
+      row.statusHistory = Array.isArray(row.statusHistory) ? row.statusHistory : [];
+      row.statusHistory.push({ status: status, note: note, at: new Date().toISOString(), by: 'Current user' });
+    }
+    renderContent();
+
+    google.script.run
+      .withSuccessHandler(function(response) {
+        if (typeof pendingSave_ !== 'undefined') pendingSave_.unlock('ar_' + id);
+        var btn2 = document.querySelector('[data-ar-save="' + id + '"]');
+        var sel2 = byId('arStatus_' + id);
+        if (typeof setPortalRowSavingV414 === 'function') setPortalRowSavingV414(rowEl, false);
+        if (btn2) { btn2.disabled = false; btn2.textContent = 'Save'; }
+        if (sel2) sel2.disabled = false;
+        if (!response || !response.success) {
+          toast((response && response.error) || 'Could not save status. Please refresh and try again.', 'error');
+          return;
+        }
+        toast('Status saved to ' + status + ' ✓', 'success');
+      })
+      .withFailureHandler(function(error) {
+        if (typeof pendingSave_ !== 'undefined') pendingSave_.unlock('ar_' + id);
+        var btn2 = document.querySelector('[data-ar-save="' + id + '"]');
+        var sel2 = byId('arStatus_' + id);
+        if (typeof setPortalRowSavingV414 === 'function') setPortalRowSavingV414(rowEl, false);
+        if (btn2) { btn2.disabled = false; btn2.textContent = 'Save'; }
+        if (sel2) sel2.disabled = false;
+        toast(error && error.message ? error.message : 'Could not save status. Please refresh and try again.', 'error');
+      })
+      .updateAdminRequestStatus({ sessionToken: token_(), requestId: id, status: status, adminNotes: note });
+  }
+
+function confirmReceived(id) {
+    var row = arState.requests.filter(function(r) { return r.requestId === id; })[0];
+    if (row) {
+      row.status = 'Received';
+      row.statusHistory = Array.isArray(row.statusHistory) ? row.statusHistory : [];
+      row.statusHistory.push({ status: 'Received', note: 'Restaurant confirmed received', at: new Date().toISOString(), by: 'Current user' });
+    }
+    renderContent();
+    toast('Marked as received.', 'success');
+    google.script.run
+      .withSuccessHandler(function(response) {
+        if (!response || !response.success) {
+          toast((response && response.error) || 'Could not mark as received. Please refresh and try again.', 'error');
+          loadData(function(){ renderContent(); });
+        }
+      })
+      .withFailureHandler(function(error) {
+        toast(error && error.message ? error.message : 'Could not mark as received. Please refresh and try again.', 'error');
+        loadData(function(){ renderContent(); });
+      })
+      .confirmOfficeSupplyReceived({ sessionToken: token_(), requestId: id });
+  }
+
+  function formatDate(value) {
+    if (!value) return '';
+    var date = new Date(value);
+    if (isNaN(date.getTime())) return safeText(value);
+    return date.toLocaleDateString();
+  }
+
+  function formatDateTime(value) {
+    if (!value) return '';
+    var date = new Date(value);
+    if (isNaN(date.getTime())) return safeText(value);
+    return date.toLocaleString();
+  }
+
+  function openPage() {
+    hideAllPages_();
+    try { if (window.state) state.currentActionKey = 'RESTAURANT_REQUEST'; } catch (error) {}
+    try { if (typeof closeRoleActionsDropdown_ === 'function') closeRoleActionsDropdown_(); } catch (error2) {}
+    renderShell();
+    loadData();
+    try { if (typeof renderRoleActions === 'function') renderRoleActions(); } catch (error3) {}
+  }
+
+  window.openAdminRequestCleanV250_ = openPage;
+})();
+
+</script>

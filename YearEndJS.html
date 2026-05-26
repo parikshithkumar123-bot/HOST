@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"></head>
+<body>
+<script>
+// ═══════════════════════════════════════════════════════════════════════════
+// YEAR END JS
+// Handles:
+//   1. Year dropdown — populates, switches, broadcasts year changes
+//   2. Year End Transition dialog — Super Admin only
+//   3. Archive read-only banner
+// ═══════════════════════════════════════════════════════════════════════════
+
+(function() {
+
+  // ── State ───────────────────────────────────────────────────────────────
+  var YE = {
+    availableYears: [],
+    activeYear: null,
+    selectedYear: null,
+    initialized: false
+  };
+
+  // ── Initialize year system on portal boot ───────────────────────────────
+  window.initYearSystem = function(sessionToken) {
+    if (YE.initialized) return;
+    google.script.run
+      .withSuccessHandler(function(res) {
+        if (!res || !res.success) return;
+        YE.availableYears = res.data.years || [];
+        YE.activeYear     = res.data.activeYear;
+        YE.selectedYear   = res.data.activeYear;
+        YE.initialized    = true;
+        renderYearDropdowns_();
+      })
+      .withFailureHandler(function(e) {
+        console.warn('Year system init failed:', e);
+      })
+      .getAvailableYears(sessionToken);
+  };
+
+  // ── Render all year dropdowns on the page ───────────────────────────────
+  function renderYearDropdowns_() {
+    var containers = document.querySelectorAll('.year-selector-container');
+    containers.forEach(function(el) {
+      el.innerHTML = buildYearDropdownHtml_();
+      var sel = el.querySelector('.ye-year-select');
+      if (sel) {
+        sel.value = String(YE.selectedYear);
+        sel.addEventListener('change', function() {
+          handleYearChange_(parseInt(this.value, 10));
+        });
+      }
+    });
+    updateArchiveBanners_();
+  }
+
+  function buildYearDropdownHtml_() {
+    if (!YE.availableYears || YE.availableYears.length <= 1) return '';
+    var options = YE.availableYears.map(function(y) {
+      return '<option value="' + y.year + '"' +
+        (y.year === YE.selectedYear ? ' selected' : '') + '>' +
+        y.label + '</option>';
+    }).join('');
+    return '<select class="ye-year-select" title="Switch year">' + options + '</select>';
+  }
+
+  // ── Year change handler ──────────────────────────────────────────────────
+  function handleYearChange_(year) {
+    if (year === YE.selectedYear) return;
+    YE.selectedYear = year;
+
+    // Sync all dropdowns
+    document.querySelectorAll('.ye-year-select').forEach(function(el) {
+      el.value = String(year);
+    });
+
+    updateArchiveBanners_();
+
+    // Broadcast to all registered page listeners
+    var isArchive = year !== YE.activeYear;
+    if (typeof window.onYearChanged === 'function') {
+      window.onYearChanged(year, isArchive);
+    }
+    // Also dispatch a custom event so individual page modules can listen
+    try {
+      var event = new CustomEvent('yeSelected', { detail: { year: year, isArchive: isArchive } });
+      document.dispatchEvent(event);
+    } catch(e) {}
+  }
+
+  // ── Archive banner ───────────────────────────────────────────────────────
+  function updateArchiveBanners_() {
+    var isArchive = YE.selectedYear !== YE.activeYear;
+    document.querySelectorAll('.ye-archive-banner').forEach(function(el) {
+      el.style.display = isArchive ? 'flex' : 'none';
+      el.querySelector('.ye-archive-year-label').textContent =
+        'Viewing ' + YE.selectedYear + ' archive — read-only';
+    });
+  }
+
+  // ── Public helpers ───────────────────────────────────────────────────────
+  window.getSelectedYear     = function() { return YE.selectedYear; };
+  window.getActiveYear       = function() { return YE.activeYear; };
+  window.isViewingArchive    = function() { return YE.selectedYear !== YE.activeYear; };
+  window.getYearForPayload   = function() {
+    return YE.selectedYear !== YE.activeYear ? YE.selectedYear : null;
+  };
+
+  // ── Archive banner HTML injector ─────────────────────────────────────────
+  // Call this in any year-aware page to inject the banner
+  window.injectArchiveBanner = function(containerEl) {
+    if (!containerEl) return;
+    if (containerEl.querySelector('.ye-archive-banner')) return; // already injected
+    var banner = document.createElement('div');
+    banner.className = 'ye-archive-banner';
+    banner.style.cssText = [
+      'display:none',
+      'align-items:center',
+      'gap:10px',
+      'background:#fff8e1',
+      'border:1px solid #f0c040',
+      'border-radius:8px',
+      'padding:10px 16px',
+      'margin-bottom:14px',
+      'font-size:13px',
+      'color:#7a5f00'
+    ].join(';');
+    banner.innerHTML =
+      '<span style="font-size:18px">📦</span>' +
+      '<span class="ye-archive-year-label" style="font-weight:600"></span>' +
+      '<span style="color:#999;font-size:12px">— Data is read-only. Switch to current year to make changes.</span>';
+    containerEl.insertBefore(banner, containerEl.firstChild);
+    updateArchiveBanners_();
+  };
+
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // YEAR END TRANSITION DIALOG
+  // ═══════════════════════════════════════════════════════════════════════
+
+  window.openYearEndTransitionDialog = function(sessionToken) {
+    var activeYear = YE.activeYear || new Date().getFullYear();
+    var nextYear   = activeYear + 1;
+
+    // Build dialog
+    var overlay = document.createElement('div');
+    overlay.id  = 'ye-transition-overlay';
+    overlay.style.cssText = [
+      'position:fixed','top:0','left:0','right:0','bottom:0',
+      'background:rgba(0,0,0,0.55)','z-index:9999',
+      'display:flex','align-items:center','justify-content:center'
+    ].join(';');
+
+    overlay.innerHTML = [
+      '<div style="background:#fff;border-radius:14px;width:520px;max-width:94vw;',
+        'box-shadow:0 8px 40px rgba(0,0,0,0.22);overflow:hidden;">',
+
+        // Header
+        '<div style="background:linear-gradient(135deg,#002b5c,#0076b6);',
+          'padding:20px 24px;color:#fff;">',
+          '<div style="font-size:18px;font-weight:700;margin-bottom:4px">',
+            '📅 Year End Transition</div>',
+          '<div style="font-size:13px;opacity:0.85;">',
+            'Archive ' + activeYear + ' data and start fresh for ' + nextYear,
+          '</div>',
+        '</div>',
+
+        // Body
+        '<div style="padding:24px;" id="ye-dialog-body">',
+
+          // What will happen
+          '<div style="background:#f4f8ff;border-radius:8px;padding:14px 16px;',
+            'margin-bottom:20px;font-size:13px;line-height:1.8;color:#334;">',
+            '<div style="font-weight:700;margin-bottom:6px;color:#002b5c;">',
+              'What this will do:</div>',
+            '<div>📦 Copy <strong>' + activeYear + ' data</strong> to a new archive spreadsheet</div>',
+            '<div>🔒 Lock the archive as read-only</div>',
+            '<div>🗑️ Clear transactional tabs (Payroll, Admin Requests, Hiring, etc.)</div>',
+            '<div>📰 Carry forward published Hot Zone editions as drafts</div>',
+            '<div>✅ Keep Users, Restaurants, Team Members, Templates intact</div>',
+            '<div>📊 Start portal on <strong>' + nextYear + '</strong></div>',
+          '</div>',
+
+          // 5W Sheet URL input
+          '<div style="margin-bottom:20px;">',
+            '<label style="display:block;font-size:13px;font-weight:600;',
+              'color:#334;margin-bottom:6px;">',
+              '5W Tracker Sheet URL for ' + nextYear,
+              '<span style="font-weight:400;color:#888;margin-left:6px;">',
+                '(optional — leave blank to keep current)',
+              '</span>',
+            '</label>',
+            '<input id="ye-fivew-url" type="text" ',
+              'placeholder="https://docs.google.com/spreadsheets/d/..." ',
+              'style="width:100%;box-sizing:border-box;padding:9px 12px;',
+              'border:1px solid #d0d7e3;border-radius:7px;font-size:13px;',
+              'outline:none;transition:border 0.2s;" ',
+              'onfocus="this.style.borderColor=\'#0076b6\'" ',
+              'onblur="this.style.borderColor=\'#d0d7e3\'" />',
+            '<div style="font-size:11px;color:#888;margin-top:4px;">',
+              'Paste the full Google Sheets URL for the new ' + nextYear + ' 5W evaluation sheet.',
+            '</div>',
+          '</div>',
+
+          // Warning
+          '<div style="background:#fff8e1;border:1px solid #f0c040;border-radius:8px;',
+            'padding:12px 14px;margin-bottom:20px;font-size:12px;color:#7a5f00;',
+            'display:flex;gap:10px;align-items:flex-start;">',
+            '<span style="font-size:16px;flex-shrink:0;">⚠️</span>',
+            '<div>',
+              '<strong>This cannot be undone.</strong> Run a dry run first to preview. ',
+              'Make sure all active payroll submissions are approved before proceeding.',
+            '</div>',
+          '</div>',
+
+          // Log output (hidden initially)
+          '<div id="ye-log-container" style="display:none;margin-bottom:16px;">',
+            '<div style="font-size:12px;font-weight:600;color:#334;margin-bottom:6px;">',
+              'Transition Log</div>',
+            '<div id="ye-log-output" style="background:#0d1117;color:#c9d1d9;',
+              'border-radius:7px;padding:12px;font-size:11px;line-height:1.7;',
+              'font-family:monospace;max-height:180px;overflow-y:auto;">',
+            '</div>',
+          '</div>',
+
+          // Buttons
+          '<div style="display:flex;gap:10px;justify-content:flex-end;">',
+            '<button onclick="document.getElementById(\'ye-transition-overlay\').remove()" ',
+              'style="padding:9px 18px;border:1px solid #d0d7e3;border-radius:7px;',
+              'background:#fff;color:#334;font-size:13px;cursor:pointer;" ',
+              'id="ye-cancel-btn">Cancel</button>',
+            '<button onclick="yeRunDryRun()" ',
+              'style="padding:9px 18px;border:1px solid #0076b6;border-radius:7px;',
+              'background:#fff;color:#0076b6;font-size:13px;cursor:pointer;font-weight:600;" ',
+              'id="ye-dryrun-btn">🔍 Dry Run Preview</button>',
+            '<button onclick="yeRunTransition()" ',
+              'style="padding:9px 18px;border:none;border-radius:7px;',
+              'background:#c0392b;color:#fff;font-size:13px;cursor:pointer;font-weight:700;" ',
+              'id="ye-run-btn">🚀 Run Year End</button>',
+          '</div>',
+
+        '</div>', // body
+      '</div>'   // card
+    ].join('');
+
+    document.body.appendChild(overlay);
+
+    // Close on overlay click
+    overlay.addEventListener('click', function(e) {
+      if (e.target === overlay) overlay.remove();
+    });
+
+    // Store token for button handlers
+    overlay._sessionToken = sessionToken;
+  };
+
+  // ── Dry run ──────────────────────────────────────────────────────────────
+  window.yeRunDryRun = function() {
+    var overlay = document.getElementById('ye-transition-overlay');
+    if (!overlay) return;
+    yeSetDialogLoading_(true, 'Running dry run...');
+
+    google.script.run
+      .withSuccessHandler(function(res) {
+        yeSetDialogLoading_(false);
+        if (!res || !res.success) {
+          yeShowLog_(['❌ ' + (res && res.error ? res.error : 'Dry run failed')]);
+          return;
+        }
+        var d = res.data;
+        var lines = [
+          '✅ Dry run complete — no changes made.',
+          '─────────────────────────────',
+          'Active year:  ' + d.activeYear,
+          'Next year:    ' + d.nextYear,
+          '─────────────────────────────',
+          'Tabs to CLEAR (' + d.tabsToClear.length + '):',
+        ].concat(d.tabsToClear.map(function(t) { return '   • ' + t; }))
+        .concat([
+          '─────────────────────────────',
+          '5W Tracker URL: ' + (d.fiveWSheetUrl ? '✅ New URL provided' : 'No change'),
+          '─────────────────────────────',
+          'Ready to run. Click "Run Year End" to proceed.'
+        ]);
+        yeShowLog_(lines);
+      })
+      .withFailureHandler(function(e) {
+        yeSetDialogLoading_(false);
+        yeShowLog_(['❌ Dry run error: ' + e.message]);
+      })
+      .runYearEndTransition({
+        sessionToken: overlay._sessionToken,
+        fiveWSheetUrl: document.getElementById('ye-fivew-url').value,
+        dryRun: true
+      });
+  };
+
+  // ── Real transition ───────────────────────────────────────────────────────
+  window.yeRunTransition = function() {
+    var overlay = document.getElementById('ye-transition-overlay');
+    if (!overlay) return;
+
+    if (!confirm(
+      'Are you sure you want to run the Year End Transition?\n\n' +
+      'This will archive this year\'s data and cannot be undone.\n\n' +
+      'Click OK to proceed.'
+    )) return;
+
+    yeSetDialogLoading_(true, 'Running year-end transition... please wait.');
+    document.getElementById('ye-cancel-btn').disabled = true;
+    document.getElementById('ye-dryrun-btn').disabled = true;
+    document.getElementById('ye-run-btn').disabled    = true;
+
+    google.script.run
+      .withSuccessHandler(function(res) {
+        yeSetDialogLoading_(false);
+        if (!res || !res.success) {
+          yeShowLog_(['❌ Transition failed: ' + (res && res.error ? res.error : 'Unknown error')]);
+          document.getElementById('ye-cancel-btn').disabled = false;
+          return;
+        }
+        var d    = res.data;
+        var lines = (d.log || []).concat([
+          '',
+          '🎉 SUCCESS! Portal is now running on ' + d.newActiveYear + '.',
+          'Archive spreadsheet ID: ' + d.archiveId
+        ]);
+        yeShowLog_(lines);
+
+        // Update year system state
+        YE.activeYear   = d.newActiveYear;
+        YE.selectedYear = d.newActiveYear;
+        if (d.archivedYear) {
+          YE.availableYears.unshift({
+            year: d.newActiveYear,
+            label: String(d.newActiveYear) + ' (Current)',
+            isActive: true,
+            isArchive: false
+          });
+          // Update old active entry
+          YE.availableYears.forEach(function(y) {
+            if (y.year === d.archivedYear) {
+              y.isActive  = false;
+              y.isArchive = true;
+              y.label     = String(d.archivedYear) + ' (Archive)';
+            }
+          });
+        }
+        renderYearDropdowns_();
+
+        // Change close button to "Done"
+        document.getElementById('ye-cancel-btn').textContent = 'Close';
+        document.getElementById('ye-cancel-btn').disabled    = false;
+        document.getElementById('ye-cancel-btn').style.background = '#002b5c';
+        document.getElementById('ye-cancel-btn').style.color      = '#fff';
+      })
+      .withFailureHandler(function(e) {
+        yeSetDialogLoading_(false);
+        yeShowLog_(['❌ Transition error: ' + e.message]);
+        document.getElementById('ye-cancel-btn').disabled = false;
+        document.getElementById('ye-dryrun-btn').disabled = false;
+        document.getElementById('ye-run-btn').disabled    = false;
+      })
+      .runYearEndTransition({
+        sessionToken: overlay._sessionToken,
+        fiveWSheetUrl: document.getElementById('ye-fivew-url').value,
+        dryRun: false
+      });
+  };
+
+  function yeSetDialogLoading_(loading, message) {
+    var btn = document.getElementById('ye-run-btn');
+    var dry = document.getElementById('ye-dryrun-btn');
+    if (!btn) return;
+    if (loading) {
+      btn.disabled = true;
+      btn.textContent = '⏳ Running...';
+      if (dry) dry.disabled = true;
+      if (message) yeShowLog_([message]);
+    } else {
+      btn.disabled = false;
+      btn.textContent = '🚀 Run Year End';
+      if (dry) dry.disabled = false;
+    }
+  }
+
+  function yeShowLog_(lines) {
+    var container = document.getElementById('ye-log-container');
+    var output    = document.getElementById('ye-log-output');
+    if (!container || !output) return;
+    container.style.display = 'block';
+    output.innerHTML = lines.map(function(line) {
+      var color = '#c9d1d9';
+      if (line.indexOf('✅') !== -1 || line.indexOf('🎉') !== -1) color = '#3fb950';
+      if (line.indexOf('❌') !== -1) color = '#f85149';
+      if (line.indexOf('⏳') !== -1 || line.indexOf('Running') !== -1) color = '#d29922';
+      if (line.indexOf('─') !== -1) color = '#444c56';
+      return '<div style="color:' + color + '">' +
+        line.replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</div>';
+    }).join('');
+    output.scrollTop = output.scrollHeight;
+  }
+
+})();
+</script>
+</body>
+</html>

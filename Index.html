@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <base target="_top" />
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title><?= appName ?></title>
+    <?!= include('Styles'); ?>
+  </head>
+  <body>
+    <script>
+      window.__BOOT__ = <?= boot ?>;
+    </script>
+
+    <div class="app-shell">
+      <section class="login-stage">
+        <div class="login-panel">
+          <div class="glass-card">
+            <img class="logo" src="data:image/gif;base64,R0lGODlhAQABAAAAACwAAAAAAQABAAA=" data-heart-logo-target="login" alt="Company logo" referrerpolicy="no-referrer" />
+            <p class="eyebrow">Company Portal</p>
+            <h1>SAISETHSONS HOSPITALITY GROUP</h1>
+            <form class="login-form" id="loginForm">
+              <label>
+                <span>Username</span>
+                <input id="usernameField" type="text" autocomplete="username"
+                     aria-label="Username" aria-required="true" placeholder="Enter username" />
+              </label>
+              <label>
+                <span>Password</span>
+                <input id="passwordField" type="password" autocomplete="current-password"
+                     aria-label="Password" aria-required="true" placeholder="Enter password" />
+              </label>
+              <div class="form-row">
+                <label class="checkbox">
+                  <input id="showPassword" type="checkbox" />
+                  <span>Show password</span>
+                </label>
+                <label class="checkbox">
+                  <input id="rememberMe" type="checkbox" />
+                  <span>Remember me</span>
+                </label>
+              </div>
+              <button class="primary-btn" id="loginButton" type="submit">Secure Login</button>
+              <div class="loading-row" id="loadingRow" hidden>
+                <span class="spinner"></span>
+                <span>Signing in...</span>
+              </div>
+              <p class="message" id="loginMessage" role="alert" aria-live="polite"></p>
+              <div class="login-brand-strip">
+                <img src="https://drive.google.com/thumbnail?id=17rNxBPcxA0cnIoC4yLwy70tf4_t3cpDA&sz=w200" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none'" />
+                <img src="https://drive.google.com/thumbnail?id=1HciBb9XVzYOAtjZjYRo1M8F7XumBVBqh&sz=w200" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none'" />
+                <img src="https://drive.google.com/thumbnail?id=1ViymlvbdOsoiMHYLcgGzKwRaLlLSa8Fp&sz=w200" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none'" />
+                <img src="https://drive.google.com/thumbnail?id=1GS-Xwap7f2K_5rr0I70kpbgWwn3fP6Kh&sz=w200" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none'" />
+                <img src="https://drive.google.com/thumbnail?id=1_bEuMXzhhadKHB9pG2fxgvu24aYjZBdj&sz=w200" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none'" />
+              </div>
+              <div class="form-footer">
+                <button class="text-link" id="forgotPasswordButton" type="button">Forgot password</button>
+                <button class="text-link" id="loginSupportButton" type="button">Contact support</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <section class="dashboard-stage" hidden>
+        <header class="topbar glass-card">
+          <div class="topbar-main">
+            <div class="topbar-left">
+              <p class="eyebrow">Premium Company Portal</p>
+              <h1>SAISETHSONS HOSPITALITY GROUP</h1>
+            </div>
+
+            <div class="top-actions">
+              <button id="setupButton" type="button" hidden>Initialize Tabs</button>
+              <button id="notificationsButton" type="button" hidden style="display:none">Notifications</button>
+              <button id="contactButton" type="button" data-tooltip="Contact Us"><span class="btn-label">Contact Us</span></button>
+              <button id="themeButton" type="button" data-tooltip="Theme"><span class="btn-label">Theme</span></button>
+              <button id="logoutButton" class="danger" type="button" data-tooltip="Logout"><span class="btn-label">Logout</span></button>
+              <div class="ext-links-dropdown" id="timHortonsLinks" style="display:none;">
+                <button class="ext-links-btn" id="extLinksBtn" type="button">
+                  <span class="ext-links-icon"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2.5 11.5L11.5 2.5M11.5 2.5H5.5M11.5 2.5V8.5" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                  <span class="btn-label">External Links</span>
+                </button>
+                <div class="ext-links-menu" id="extLinksMenu" hidden>
+                  <a href="https://www.timzone.com" target="_blank" rel="noopener noreferrer" class="ext-links-item">
+                    <span class="ext-links-item-icon">&#9679;</span>
+                    <span>Tim Zone</span>
+                  </a>
+                  <a href="https://th.rinsights.com" target="_blank" rel="noopener noreferrer" class="ext-links-item">
+                    <span class="ext-links-item-icon">&#9679;</span>
+                    <span>Timsights</span>
+                  </a>
+                  <a href="https://qssweb.com/" target="_blank" rel="noopener noreferrer" class="ext-links-item">
+                    <span class="ext-links-item-icon">&#9679;</span>
+                    <span>Clearview</span>
+                  </a>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="premium-role-dropdown">
+            <button id="roleActionDropdownBtn" class="premium-role-btn" type="button">
+              Role Actions ▾ 👑
+            </button>
+            <div id="roleActionDropdownMenu" class="premium-role-menu" hidden></div>
+          </div>
+        </header>
+
+        <main class="dashboard-grid">
+          <section class="center-column card">
+            <div class="host-zone">
+              <div class="host-zone-border"></div>
+<div class="host-zone-divider-x"></div>
+<div class="host-zone-divider-y"></div>
+              <div class="host-glow host-glow-1"></div>
+              <div class="host-glow host-glow-2"></div>
+              <div class="host-glow host-glow-3"></div>
+              <div class="host-beam beam-h"></div>
+              <div class="host-beam beam-o"></div>
+              <div class="host-beam beam-s"></div>
+              <div class="host-beam beam-t"></div>
+              <div class="orbit-ring orbit-ring-1"></div>
+              <div class="orbit-ring orbit-ring-2"></div>
+              <div class="orbit-dot dot-h-1"></div>
+              <div class="orbit-dot dot-h-2"></div>
+              <div class="orbit-dot dot-o-1"></div>
+              <div class="orbit-dot dot-o-2"></div>
+              <div class="orbit-dot dot-s-1"></div>
+              <div class="orbit-dot dot-s-2"></div>
+              <div class="orbit-dot dot-t-1"></div>
+              <div class="orbit-dot dot-t-2"></div>
+              <button class="host-node host-h" data-host="H" type="button">
+                <span class="host-node-letter">H</span>
+                <span class="host-node-label">Hospitality</span>
+              </button>
+              <div class="host-flyout flyout-h" data-flyout="H" hidden></div>
+              <button class="host-node host-o" data-host="O" type="button">
+                <span class="host-node-letter">O</span>
+                <span class="host-node-label">Operations</span>
+              </button>
+              <div class="host-flyout flyout-t" data-flyout="O" hidden></div>
+              <button class="host-node host-s" data-host="S" type="button">
+                <span class="host-node-letter">S</span>
+                <span class="host-node-label">Systems</span>
+              </button>
+              <div class="host-flyout flyout-s" data-flyout="S" hidden></div>
+              <button class="host-node host-t" data-host="T" type="button">
+                <span class="host-node-letter">T</span>
+                <span class="host-node-label">Training</span>
+              </button>
+              <div class="host-flyout flyout-o" data-flyout="T" hidden></div>
+              <div class="host-core-wrap">
+                <div class="host-core"></div>
+                <div class="host-heart-shell">
+                  <div class="host-heart-art" data-heart-logo-target="dashboard" aria-label="HOST heart logo" role="img"></div>
+                </div>
+              </div>
+            </div>
+            <div class="host-caption">
+              <h3>HOST Quick Access</h3>
+              <p id="hostMessage">Click any HOST letter to open a floating quick-link panel beside that circle.</p>
+            </div>
+          </section>
+
+          <aside class="right-column">
+            <section class="right-summary card">
+              <h3>Live Summary</h3>
+              <div class="metric-grid" id="metricGrid">
+                <div class="metric">
+                  <strong>--</strong>
+                  <span>Loading</span>
+                </div>
+              </div>
+            </section>
+
+            <section class="admin-workspace card" id="adminWorkspace" hidden>
+              <div class="admin-workspace-header">
+                <div>
+                  <p class="eyebrow" id="adminWorkspaceEyebrow">Workspace Control Center</p>
+                  <h3 id="adminWorkspaceTitle">Operations Setup and Master Data</h3>
+                  <p class="admin-workspace-note" id="adminWorkspaceNote">Use the section tabs below or the left Role Actions menu to focus on one control area at a time.</p>
+                </div>
+              </div>
+              <div class="admin-summary-grid" id="adminSummaryGrid"></div>
+              <div class="admin-section-tabs" id="adminSectionTabs"></div>
+              <div class="admin-section-stack" id="adminSections"></div>
+            </section>
+          </aside>
+        </main>
+
+        <section class="newsletter card">
+          <div class="newsletter-header">
+            <h3>Internal Newsletter</h3>
+            <a class="newsletter-view-all" href="#" role="button">View All</a>
+          </div>
+          <div class="newsletter-slide" id="newsletterSlide">
+            <p class="eyebrow">Auto-rotates every 10 seconds</p>
+            <h4>Portal ready for live newsletter content</h4>
+            <p>Targeted content appears by role, date, and restaurant access with automatic expiry.</p>
+          </div>
+        </section>
+
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="requestModal" hidden>
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Request Center</p>
+            <h3 id="requestModalTitle">Create Request</h3>
+          </div>
+          <button class="close-btn" id="requestModalClose" type="button">Close</button>
+        </div>
+        <form class="request-form" id="requestForm">
+          <input id="requestGroupField" type="hidden" />
+          <input id="requestModeField" type="hidden" />
+          <label>
+            <span id="requestTypeLabel">Request Type</span>
+            <select id="requestTypeField">
+              <option value="HIRING_REQUEST">Hiring Request</option>
+              <option value="URGENT_STAFFING_REQUEST">Urgent Staffing Request</option>
+              <option value="TRANSFER_REQUEST">Transfer Request</option>
+              <option value="JOB_LETTER_REQUEST">Job Letter Request</option>
+              <option value="EMPLOYMENT_LETTER">Employment Letter</option>
+              <option value="GENERAL_ADMIN_REQUEST">General Admin Request</option>
+              <option value="OFFICE_SUPPLIES_REQUEST">Office Supplies Request</option>
+              <option value="UNIFORM_REQUEST">Uniform Request</option>
+              <option value="STATIONERY_REQUEST">Stationery Request</option>
+              <option value="REPAIR_REQUEST">Repair Request</option>
+            </select>
+          </label>
+          <label>
+            <span id="requestRestaurantLabel">Restaurant ID</span>
+            <input id="requestRestaurantField" type="text" placeholder="Leave blank to use assigned restaurant" />
+          </label>
+          <label>
+            <span id="requestReasonLabel">Business Reason</span>
+            <textarea id="requestReasonField" rows="4" placeholder="Describe the request clearly"></textarea>
+          </label>
+          <div class="dynamic-form-grid" id="requestDynamicFields"></div>
+          <div class="form-row">
+            <button class="primary-btn" id="requestSubmitButton" type="submit">Submit Request</button>
+            <button class="secondary-btn" id="requestCancelButton" type="button">Cancel</button>
+          </div>
+          <p class="message" id="requestMessage"></p>
+          <div class="admin-table-wrap" id="requestHistoryWrap" hidden>
+            <table class="admin-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Type</th>
+                  <th>Status</th>
+                  <th>Date</th>
+                </tr>
+              </thead>
+              <tbody id="requestHistoryBody"></tbody>
+            </table>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="userModal" hidden>
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Super Admin</p>
+            <h3 id="userModalTitle">Create Portal User</h3>
+          </div>
+          <button class="close-btn" id="userModalClose" type="button">Close</button>
+        </div>
+        <form class="request-form" id="userForm">
+          <input id="editingUserIdField" type="hidden" />
+          <div class="split-grid">
+            <label>
+              <span>Full Name</span>
+              <input id="userFullNameField" type="text" placeholder="Enter full name" />
+            </label>
+            <label>
+              <span>Username</span>
+              <input id="userUsernameField" type="text" placeholder="Enter username" />
+            </label>
+          </div>
+          <div class="split-grid">
+            <label>
+              <span>Email</span>
+              <input id="userEmailField" type="email" placeholder="Enter email address" />
+            </label>
+            <label>
+              <span>Phone</span>
+              <input id="userPhoneField" type="text" placeholder="Optional phone number" />
+            </label>
+          </div>
+          <div class="split-grid">
+            <label>
+              <span>Role</span>
+              <select id="userRoleField"></select>
+            </label>
+            <label>
+              <span>Primary Restaurant</span>
+              <select id="userRestaurantField"></select>
+            </label>
+          </div>
+          <div class="split-grid">
+            <label>
+              <span>Assigned Restaurants</span>
+              <div class="multi-select" id="restaurantMultiSelect">
+                <button class="secondary-btn multi-select-trigger" id="restaurantMultiSelectTrigger" type="button">Select restaurants</button>
+                <div class="multi-select-panel" id="restaurantMultiSelectPanel" hidden>
+                  <div class="multi-select-actions">
+                    <input id="restaurantSearchField" type="text" placeholder="Search restaurant number" />
+                    <button class="text-link" id="selectAllRestaurantsButton" type="button">Select all restaurants</button>
+                    <button class="text-link" id="clearRestaurantsButton" type="button">Clear selection</button>
+                  </div>
+                  <div class="multi-select-list" id="restaurantChecklist"></div>
+                  <div class="multi-select-footer">
+                    <button class="primary-btn" id="saveRestaurantSelectionButton" type="button">Save assigned restaurants</button>
+                  </div>
+                </div>
+              </div>
+              <input id="assignedRestaurantsField" type="hidden" />
+            </label>
+            <label>
+              <span>Region</span>
+              <input id="userRegionField" type="text" placeholder="Region" />
+            </label>
+          </div>
+          <div class="split-grid">
+            <label>
+              <span>Employee ID</span>
+              <input id="userEmployeeIdField" type="text" placeholder="Optional employee ID" />
+            </label>
+            <label>
+              <span>Temporary Password</span>
+              <input id="userPasswordField" type="password" placeholder="Minimum 8 characters" />
+            </label>
+          </div>
+          <div class="form-row">
+            <button class="primary-btn" id="userSubmitButton" type="submit">Save User</button>
+            <button class="secondary-btn" id="userResetPasswordButton" type="button">Reset Password</button>
+            <button class="secondary-btn" id="userCancelButton" type="button">Cancel</button>
+          </div>
+          <p class="message" id="userMessage"></p>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="restaurantModal" hidden>
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Super Admin</p>
+            <h3 id="restaurantModalTitle">Create Restaurant</h3>
+          </div>
+          <button class="close-btn" id="restaurantModalClose" type="button">Close</button>
+        </div>
+        <form class="request-form" id="restaurantForm">
+          <input id="editingRestaurantIdField" type="hidden" />
+          <div class="split-grid">
+            <label>
+              <span>Restaurant Code</span>
+              <input id="restaurantCodeField" type="text" placeholder="Restaurant number or code" />
+            </label>
+            <label>
+              <span>Restaurant Name</span>
+              <input id="restaurantNameField" type="text" placeholder="Restaurant name" />
+            </label>
+          </div>
+          <div class="split-grid">
+            <label>
+              <span>Brand Name</span>
+              <select id="restaurantBrandField">
+                <option value="">— Select Brand —</option>
+              </select>
+            </label>
+            <label>
+              <span>Status</span>
+              <select id="restaurantStatusField">
+                <option value="ACTIVE">Active</option>
+                <option value="INACTIVE">Inactive</option>
+              </select>
+            </label>
+          </div>
+          <div class="split-grid">
+            <label>
+              <span>Region</span>
+              <input id="restaurantRegionField" type="text" placeholder="Region" />
+            </label>
+            <label>
+              <span>City</span>
+              <input id="restaurantCityField" type="text" placeholder="City" />
+            </label>
+          </div>
+          <div class="split-grid">
+            <label>
+              <span>Province / State</span>
+              <input id="restaurantProvinceField" type="text" placeholder="Province or state" />
+            </label>
+            <label>
+              <span>Country</span>
+              <input id="restaurantCountryField" type="text" placeholder="Country" />
+            </label>
+          </div>
+          <div class="split-grid">
+            <label>
+              <span>Opening Date</span>
+              <input id="restaurantOpeningDateField" type="date" />
+            </label>
+            <label>
+              <span>GM Name</span>
+              <input id="restaurantGmNameField" type="text" placeholder="GM name" />
+            </label>
+          </div>
+          <div class="split-grid">
+            <label>
+              <span>GM Email</span>
+              <input id="restaurantGmEmailField" type="email" placeholder="GM email" />
+            </label>
+            <label>
+              <span>MRO Owner User ID</span>
+              <input id="restaurantMroOwnerField" type="text" placeholder="Optional MRO owner user ID" />
+            </label>
+          </div>
+          <label>
+            <span>Notes</span>
+            <textarea id="restaurantNotesField" rows="3" placeholder="Notes"></textarea>
+          </label>
+          <div class="form-row">
+            <button class="primary-btn" id="restaurantSubmitButton" type="submit">Save Restaurant</button>
+            <button class="secondary-btn" id="restaurantCancelButton" type="button">Cancel</button>
+          </div>
+          <p class="message" id="restaurantMessage"></p>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="recordModal" hidden>
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Super Admin</p>
+            <h3 id="recordModalTitle">Edit Record</h3>
+          </div>
+          <button class="close-btn" id="recordModalClose" type="button">Close</button>
+        </div>
+        <form class="request-form" id="recordForm">
+          <div class="dynamic-form-grid" id="recordFormFields"></div>
+          <div class="form-row">
+            <button class="primary-btn" id="recordSubmitButton" type="submit">Save</button>
+            <button class="secondary-btn" id="recordCancelButton" type="button">Cancel</button>
+          </div>
+          <p class="message" id="recordMessage"></p>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="importModal" hidden>
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Excel Import</p>
+            <h3 id="importModalTitle">Import Data</h3>
+          </div>
+          <button class="close-btn" id="importModalClose" type="button">Close</button>
+        </div>
+        <form class="request-form" id="importForm">
+          <p class="helper-text" id="importInstructions"></p>
+          <label>
+            <span>Paste copied Excel rows or CSV data</span>
+            <textarea id="importTextField" rows="10" placeholder="Paste rows from Excel here"></textarea>
+          </label>
+          <div class="form-row">
+            <button class="primary-btn" id="importSubmitButton" type="submit">Import</button>
+            <button class="secondary-btn" id="importCancelButton" type="button">Cancel</button>
+          </div>
+          <p class="message" id="importMessage"></p>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="infoModal" hidden>
+      <div class="modal-card info-modal-card">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Portal Assistance</p>
+            <h3 id="infoModalTitle">Support</h3>
+          </div>
+          <button class="close-btn" id="infoModalClose" type="button">Close</button>
+        </div>
+        <div class="info-modal-body">
+          <p id="infoModalMessage"></p>
+        </div>
+        <div class="form-row info-modal-actions">
+          <button class="primary-btn" id="infoModalAction" type="button">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="rollActionsModal" hidden>
+      <div class="modal-card roll-actions-modal-card">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Recruitment Workflow</p>
+            <h3>Roll Actions</h3>
+          </div>
+          <button class="close-btn" id="rollActionsClose" type="button">Close</button>
+        </div>
+        <div class="roll-actions-body">
+          <p class="helper-text">Choose one option to continue. The modal closes after selection, and you can reopen it anytime.</p>
+          <div class="roll-actions-options">
+            <button class="roll-option-card" data-roll-action="NEW_HEROS" type="button">
+              <strong>New Heroes</strong>
+              <span>View or start the new hero flow.</span>
+            </button>
+            <button class="roll-option-card" data-roll-action="HIRING_REQUEST" type="button">
+              <strong>Hiring Request</strong>
+              <span>Open the hiring request path.</span>
+            </button>
+          </div>
+          <p class="roll-actions-selection" id="rollActionsSelection">No option selected yet.</p>
+        </div>
+        <div class="form-row info-modal-actions">
+          <button class="secondary-btn" id="rollActionsCancel" type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="contactRequestModal" hidden>
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Contact Us</p>
+            <h3>Send Support Request</h3>
+          </div>
+          <button class="close-btn" id="contactRequestClose" type="button">Close</button>
+        </div>
+        <form class="request-form" id="contactRequestForm">
+          <div class="split-grid">
+            <label>
+              <span>Name</span>
+              <input id="contactNameField" type="text" placeholder="Your name" />
+            </label>
+            <label>
+              <span>Username</span>
+              <input id="contactUsernameField" type="text" placeholder="Your username" />
+            </label>
+          </div>
+          <div class="split-grid">
+            <label>
+              <span>Email</span>
+              <input id="contactEmailField" type="email" placeholder="Email" />
+            </label>
+            <label>
+              <span>Phone</span>
+              <input id="contactPhoneField" type="text" placeholder="Phone" />
+            </label>
+          </div>
+          <label>
+            <span>Message</span>
+            <textarea id="contactMessageField" rows="4" placeholder="How can we help?"></textarea>
+          </label>
+          <div class="form-row">
+            <button class="primary-btn" type="submit">Save Request</button>
+            <button class="secondary-btn" id="contactRequestCancel" type="button">Cancel</button>
+          </div>
+          <p class="message" id="contactRequestMessage"></p>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="passwordRequestModal" hidden>
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Password Change</p>
+            <h3>Request Password Reset</h3>
+          </div>
+          <button class="close-btn" id="passwordRequestClose" type="button">Close</button>
+        </div>
+        <form class="request-form" id="passwordRequestForm">
+          <div class="split-grid">
+            <label>
+              <span>Name</span>
+              <input id="passwordRequestNameField" type="text" placeholder="Your name" />
+            </label>
+            <label>
+              <span>Username</span>
+              <input id="passwordRequestUsernameField" type="text" placeholder="Your username" />
+            </label>
+          </div>
+          <div class="split-grid">
+            <label>
+              <span>Email</span>
+              <input id="passwordRequestEmailField" type="email" placeholder="Email" />
+            </label>
+            <label>
+              <span>Phone</span>
+              <input id="passwordRequestPhoneField" type="text" placeholder="Phone" />
+            </label>
+          </div>
+          <label>
+            <span>Message</span>
+            <textarea id="passwordRequestMessageField" rows="3" placeholder="Optional message"></textarea>
+          </label>
+          <div class="form-row">
+            <button class="primary-btn" type="submit">Save Request</button>
+            <button class="secondary-btn" id="passwordRequestCancel" type="button">Cancel</button>
+          </div>
+          <p class="message" id="passwordRequestMessage"></p>
+        </form>
+      </div>
+    </div>
+
+    <section class="feature-page card" id="newHeroesPage" hidden>
+      <div class="feature-page-header">
+        <div>
+          <p class="eyebrow">Recruitment</p>
+          <h3>New Heroes</h3>
+          <p class="helper-text">Add new employees and assign them to restaurants.</p>
+        </div>
+        <button class="secondary-btn" id="newHeroesBackButton" type="button">Back</button>
+      </div>
+
+      <form class="new-heroes-form" id="newHeroesForm">
+        <div class="split-grid">
+          <label>
+            <span>Employee Name</span>
+            <input id="newHeroesNameField" type="text" placeholder="Employee name" />
+          </label>
+
+          <label>
+            <span>Mobile Number</span>
+            <input id="newHeroesMobileField" type="text" placeholder="Mobile number" />
+          </label>
+        </div>
+
+        <div class="split-grid">
+          <label>
+            <span>Hire Date</span>
+            <input id="newHeroesHireDateField" type="date" />
+          </label>
+
+          <label>
+            <span>Assign Restaurants</span>
+            <div class="mt-dropdown-wrap">
+              <button class="mt-dropdown-btn" id="newHeroesRestaurantDropdownBtn" type="button">
+                Select restaurants
+              </button>
+              <div class="mt-dropdown-panel" id="newHeroesRestaurantPanel" hidden>
+                <input class="mt-search" id="newHeroesRestaurantSearch" type="text" placeholder="Search restaurants" />
+                <div class="mt-checklist" id="newHeroesRestaurantChecklist"></div>
+                <div class="mt-dropdown-actions">
+                  <button class="secondary-btn" id="newHeroesRestaurantDoneBtn" type="button">Done</button>
+                </div>
+              </div>
+            </div>
+          </label>
+        </div>
+
+        <div class="form-row">
+          <button class="primary-btn" type="submit">Save New Hero</button>
+          <button class="secondary-btn" id="newHeroesClearButton" type="button">Clear</button>
+        </div>
+
+        <p class="message" id="newHeroesPageMessage"></p>
+      </form>
+
+      <div class="new-heroes-list-wrap">
+        <h3>New Heroes List</h3>
+        <div id="newHeroesPageList" class="new-heroes-list"></div>
+      </div>
+    </section>
+    <section class="feature-page card hiring-request-page" id="hiringRequestPage" hidden>
+      <div class="feature-page-header">
+        <div>
+          <p class="eyebrow">Recruitment</p>
+          <h3>Hiring Request</h3>
+          <p class="helper-text">Submit hiring requests and review recent hiring activity.</p>
+        </div>
+        <button class="secondary-btn" id="hiringRequestBackButton" type="button">Back</button>
+      </div>
+
+      <form class="request-form" id="hiringRequestForm">
+        <div class="split-grid">
+          <label>
+            <span>Restaurant ID</span>
+            <input id="hiringRestaurantField" type="text" placeholder="Leave blank to use assigned restaurant" />
+          </label>
+
+          <label>
+            <span>Required Position</span>
+            <input id="hiringPositionField" type="text" placeholder="Example: Team Member, Supervisor" />
+          </label>
+        </div>
+
+        <div class="split-grid">
+          <label>
+            <span>Employment Type</span>
+            <select id="hiringEmploymentTypeField">
+              <option value="">Select employment type</option>
+              <option value="Full Time">Full Time</option>
+              <option value="Part Time">Part Time</option>
+              <option value="Seasonal">Seasonal</option>
+              <option value="Temporary">Temporary</option>
+            </select>
+          </label>
+
+          <label>
+            <span>Headcount</span>
+            <input id="hiringHeadcountField" type="number" min="1" value="1" />
+          </label>
+        </div>
+
+        <div class="split-grid">
+          <label>
+            <span>Urgency</span>
+            <select id="hiringUrgencyField">
+              <option value="NORMAL">Normal</option>
+              <option value="HIGH">High</option>
+              <option value="URGENT">Urgent</option>
+            </select>
+          </label>
+
+          <label>
+            <span>Preferred Start Date</span>
+            <input id="hiringStartDateField" type="date" />
+          </label>
+        </div>
+
+        <label>
+          <span>Business Reason</span>
+          <textarea id="hiringReasonField" rows="4" placeholder="Explain why this hiring request is needed"></textarea>
+        </label>
+
+        <div class="form-row">
+          <button class="primary-btn" id="hiringSubmitButton" type="submit">Submit Hiring Request</button>
+          <button class="secondary-btn" id="hiringClearButton" type="button">Clear</button>
+        </div>
+
+        <p class="message" id="hiringRequestMessage"></p>
+      </form>
+
+      <div class="hiring-recent-wrap">
+        <h3>Recent Hiring Requests</h3>
+        <div class="hiring-recent-list" id="hiringRecentList"></div>
+      </div>
+    </section>
+    <div class="toast-stack" id="toastStack"></div>
+
+    <?!= include('PortalDialogJS'); ?>
+    <?!= include('CompanyLogoJS'); ?>
+    <?!= include('PortalUXJS'); ?>
+    <?!= include('PayrollV360'); ?>
+    <?!= include('YearEndJS'); ?>
+    <?!= include('HotZoneJS'); ?>
+    <?!= include('ClientCore'); ?>
+    <?!= include('AdminRequestsJS'); ?>
+    <?!= include('RestaurantRequestsJS'); ?>
+    <?!= include('ManageTeamJS'); ?>
+    <?!= include('RecruitmentJS'); ?>
+    <?!= include('FiveWTrackerJS'); ?>
+
+  </body>
+</html>

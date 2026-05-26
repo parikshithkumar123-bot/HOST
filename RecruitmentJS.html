@@ -1,0 +1,1262 @@
+<script>
+// RECRUITMENT MODULE V19
+// FIX #2: Removed duplicate unclosed <script> tag that was splitting the file
+//         into two broken JS blocks. Both IIFEs are now inside one <script> tag.
+// FIX #7: Removed localStorage fallback in getToken(). Token is sourced only
+//         from getSessionToken_() or sessionStorage to prevent stale cross-session
+//         token reuse in the HtmlService sandbox environment.
+
+(function recruitmentClearviewPatch_v19() {
+  var recState = window.recruitmentClearviewState || {};
+
+  recState.tab = recState.tab || 'NEW_HEROES';
+  recState.teamData = recState.teamData || null;
+  recState.hiringData = recState.hiringData || null;
+  recState.loadingTeam = false;
+  recState.loadingHiring = false;
+  recState.openDetails = recState.openDetails || {};
+
+  recState.newHeroFilters = recState.newHeroFilters || {
+    restaurant: 'ALL',
+    search: '',
+    status: 'ALL',
+    limit: '10'
+  };
+
+  recState.employeeFilters = recState.employeeFilters || {
+    restaurant: 'ALL',
+    search: '',
+    status: 'ACTIVE',
+    limit: '10'
+  };
+
+  recState.hiringFilters = recState.hiringFilters || {
+    restaurant: 'ALL',
+    search: '',
+    status: 'ALL',
+    limit: '10'
+  };
+
+  recState.newHeroPage = recState.newHeroPage || 1;
+  recState.employeePage = recState.employeePage || 1;
+  recState.hiringPage = recState.hiringPage || 1;
+
+  window.recruitmentClearviewState = recState;
+
+  function byId(id) {
+    return document.getElementById(id);
+  }
+
+  function esc(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, function(ch) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch];
+    });
+  }
+
+  function attr(value) {
+    return esc(value).replace(/`/g, '&#096;');
+  }
+
+  // FIX #7: Removed localStorage fallback. Only sessionStorage and
+  // getSessionToken_() are used — localStorage is not reliably scoped per
+  // user in the HtmlService sandbox and can leak stale tokens.
+  function getToken() {
+    try {
+      if (typeof getSessionToken_ === 'function') {
+        var t = getSessionToken_();
+        if (t) return t;
+      }
+    } catch (error) {}
+
+    try {
+      return sessionStorage.getItem('portalSessionToken') ||
+        sessionStorage.getItem('sessionToken') || '';
+    } catch (error) {
+      return '';
+    }
+  }
+
+  function notify(text, type) {
+    if (typeof showToast === 'function') {
+      showToast(text, type || 'info');
+      return;
+    }
+
+    var msg = byId('rtcMessage');
+    if (msg) msg.textContent = text || '';
+  }
+
+  function formatDate(value) {
+    if (!value) return '';
+    var d = new Date(value);
+    if (isNaN(d.getTime())) return String(value).slice(0, 10);
+    return d.toLocaleDateString('en-CA');
+  }
+
+  function normalizeStatus(value) {
+    var text = String(value || '').trim();
+    var upper = text.toUpperCase().replace(/['']/g, '').replace(/[_\-]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+    if (upper === 'ACTIVE') return 'ACTIVE';
+    if (upper === 'READY TO WORK') return 'Ready to Start';
+    if (upper === 'READY TO START') return 'Ready to Start';
+    if (upper === 'WELCOME KIT DONE') return 'Welcome Kit Done';
+    if (upper === 'WORK STARTED' || upper === 'STARTED WORK' || upper === 'ALREADY STARTED') return 'Work Started';
+    if (upper === 'DIDNT SHOW UP' || upper === 'DID NOT SHOW UP' || upper === 'DIDN T SHOW UP' || upper === "DIDN'T SHOW UP") return 'Didnt Show Up';
+    if (upper === 'QUIT') return 'Quit';
+    if (upper === 'INACTIVE' || upper === 'FORMER STAFF' || upper === 'DEACTIVATED') return 'INACTIVE';
+
+    return text || 'Ready to Start';
+  }
+
+  function getTeamRows() {
+    var data = recState.teamData || {};
+    return data.teamMembers || data.employees || [];
+  }
+
+  function getRestaurants() {
+    var data = recState.teamData || recState.hiringData || {};
+    return data.restaurants || [];
+  }
+
+  function employeeRestaurants(row) {
+    if (Array.isArray(row.restaurantIds)) return row.restaurantIds.map(String).filter(Boolean);
+    var raw = row.restaurant_id || row.restaurantId || row.restaurantIds || row.assignedRestaurantIds || '';
+    return String(raw).split(',').map(function(item) {
+      return item.trim();
+    }).filter(Boolean);
+  }
+
+  function employeeRestaurantCode(row) {
+    var codes = [];
+
+    if (Array.isArray(row.restaurantCodes)) {
+      codes = row.restaurantCodes.map(function(code) {
+        return String(code || '').trim();
+      }).filter(Boolean);
+    }
+
+    if (!codes.length && row.restaurantCode) {
+      codes = String(row.restaurantCode || '').split(',').map(function(code) {
+        return String(code || '').trim();
+      }).filter(Boolean);
+    }
+
+    if (codes.length) return codes.join(', ');
+
+    var restaurants = getRestaurants();
+    return employeeRestaurants(row).map(function(id) {
+      var match = restaurants.find(function(r) {
+        return String(r.restaurantId || '') === String(id) ||
+          String(r.restaurant_id || '') === String(id) ||
+          String(r.restaurantCode || '') === String(id) ||
+          String(r.restaurant_code || '') === String(id);
+      });
+      return match && (match.restaurantCode || match.restaurant_code)
+        ? String(match.restaurantCode || match.restaurant_code).trim()
+        : String(id).trim();
+    }).filter(Boolean).join(', ');
+  }
+
+  function employeeRestaurantLabel(row) {
+    if (row.restaurantName) return row.restaurantName;
+    var restaurants = getRestaurants();
+    return employeeRestaurants(row).map(function(id) {
+      var match = restaurants.find(function(r) {
+        return String(r.restaurantId || '') === String(id) ||
+          String(r.restaurant_id || '') === String(id) ||
+          String(r.restaurantCode || '') === String(id) ||
+          String(r.restaurant_code || '') === String(id);
+      });
+      if (!match) return id;
+      var code = match.restaurantCode || match.restaurant_code || '';
+      var name = match.restaurantName || match.restaurant_name || '';
+      return ((code ? code + ' ' : '') + name).trim() || id;
+    }).join(', ');
+  }
+
+  function restaurantOptions(selected, includeAll) {
+    var html = includeAll ? '<option value="ALL">All Restaurants</option>' : '<option value="">Not Selected</option>';
+    var seen = {};
+
+    getRestaurants().forEach(function(r) {
+      var id = String(r.restaurantId || r.restaurant_id || '').trim();
+      var code = String(r.restaurantCode || r.restaurant_code || '').trim();
+      var name = String(r.restaurantName || r.restaurant_name || '').trim();
+      var value = id || code;
+      if (!value || seen[value]) return;
+      seen[value] = true;
+
+      var label = ((code ? code + ' ' : '') + name).trim() || value;
+      html += '<option value="' + attr(value) + '"' + (String(selected || '') === value ? ' selected' : '') + '>' + esc(label) + '</option>';
+    });
+
+    return html;
+  }
+
+  function optionHtml(value, label, selected) {
+    return '<option value="' + attr(value) + '"' + (String(selected) === String(value) ? ' selected' : '') + '>' + esc(label) + '</option>';
+  }
+
+
+  function pageSizeOptions(selected) {
+    return optionHtml('10', '10 per page', selected) +
+      optionHtml('25', '25 per page', selected) +
+      optionHtml('50', '50 per page', selected);
+  }
+
+  function getPageSize(filters) {
+    var size = Number(filters && filters.limit ? filters.limit : 10);
+    return size >= 10 ? size : 10;
+  }
+
+  function getTotalPages(total, size) {
+    return Math.max(1, Math.ceil(Number(total || 0) / Number(size || 10)));
+  }
+
+  function getPageSlice(rows, pageName, filters) {
+    var size = getPageSize(filters);
+    var totalPages = getTotalPages(rows.length, size);
+    var page = Number(recState[pageName] || 1);
+    if (page < 1) page = 1;
+    if (page > totalPages) page = totalPages;
+    recState[pageName] = page;
+    var start = (page - 1) * size;
+    return rows.slice(start, start + size);
+  }
+
+  function pagerHtml(total, pageName, filters, prefix) {
+    var size = getPageSize(filters);
+    var totalPages = getTotalPages(total, size);
+    var page = Number(recState[pageName] || 1);
+    if (page < 1) page = 1;
+    if (page > totalPages) page = totalPages;
+    recState[pageName] = page;
+
+    var start = total ? ((page - 1) * size) + 1 : 0;
+    var end = Math.min(total, page * size);
+
+    return '' +
+      '<div class="rtc-pager">' +
+        '<span class="rtc-pager-info">Showing ' + esc(start) + ' to ' + esc(end) + ' of ' + esc(total) + '</span>' +
+        '<button class="rtc-btn" type="button" data-rtc-page="' + attr(prefix) + '" data-dir="prev"' + (page <= 1 ? ' disabled' : '') + '>Prev</button>' +
+        '<span>Page ' + esc(page) + ' of ' + esc(totalPages) + '</span>' +
+        '<button class="rtc-btn" type="button" data-rtc-page="' + attr(prefix) + '" data-dir="next"' + (page >= totalPages ? ' disabled' : '') + '>Next</button>' +
+      '</div>';
+  }
+
+  function newHeroActionStatuses() {
+    return [
+      'Ready to Start',
+      'Welcome Kit Done',
+      'Work Started',
+      'Didnt Show Up',
+      'Quit'
+    ];
+  }
+
+  function employeeFilterStatuses() {
+    return [
+      'ACTIVE',
+      'Ready to Start',
+      'Welcome Kit Done',
+      'Work Started',
+      'Didnt Show Up',
+      'Quit',
+      'INACTIVE'
+    ];
+  }
+
+  function statusOptionsHtml(statuses, selected, allLabel) {
+    var html = optionHtml('ALL', allLabel || 'All Status', selected);
+    statuses.forEach(function(status) {
+      html += optionHtml(status, status, selected);
+    });
+    return html;
+  }
+
+  function rowStatus(row) {
+    return normalizeStatus(row.status || row.current_status || row.currentStatus || '');
+  }
+
+  function rowOutcome(row) {
+    return normalizeStatus(row.outcomeStatus || row.recruitment_outcome_status || '');
+  }
+
+  function isNewHeroRow(row) {
+    var status = rowStatus(row);
+    var outcome = rowOutcome(row);
+
+    if (outcome === 'Work Started' || outcome === 'Quit' || outcome === 'Didnt Show Up') return false;
+    return status === 'Ready to Start' || status === 'Welcome Kit Done';
+  }
+
+  function isEmployeeStatusMatch(row, filterStatus) {
+    var status = rowStatus(row);
+    var outcome = rowOutcome(row);
+    var completedAt = row.completedAt || row.recruitment_completed_at || '';
+
+    filterStatus = String(filterStatus || 'ACTIVE');
+
+    if (filterStatus === 'ALL') return true;
+
+    if (filterStatus === 'ACTIVE') {
+      return status === 'ACTIVE';
+    }
+
+    if (filterStatus === 'INACTIVE') {
+      return status === 'INACTIVE';
+    }
+
+    if (filterStatus === 'Work Started') {
+      return status === 'Work Started' || outcome === 'Work Started' || (status === 'ACTIVE' && completedAt);
+    }
+
+    if (filterStatus === 'Quit') {
+      return status === 'Quit' || outcome === 'Quit';
+    }
+
+    if (filterStatus === 'Didnt Show Up') {
+      return status === 'Didnt Show Up' || outcome === 'Didnt Show Up';
+    }
+
+    return status === filterStatus || outcome === filterStatus;
+  }
+
+  function passesCommonFilters(row, filters) {
+    var restaurant = String(filters.restaurant || 'ALL');
+    var search = String(filters.search || '').toLowerCase();
+
+    if (restaurant !== 'ALL' && employeeRestaurants(row).indexOf(restaurant) === -1) return false;
+
+    if (search) {
+      var haystack = [
+        row.name,
+        row.full_name,
+        row.fullName,
+        row.mobile,
+        row.phone,
+        row.status,
+        row.current_status,
+        row.outcomeStatus,
+        row.recruitment_outcome_status,
+        row.restaurantName,
+        row.restaurantCode,
+        employeeRestaurantCode(row)
+      ].join(' ').toLowerCase();
+
+      if (haystack.indexOf(search) === -1) return false;
+    }
+
+    return true;
+  }
+
+  function getFilteredNewHeroes() {
+    var filters = recState.newHeroFilters;
+    var rows = getTeamRows().filter(isNewHeroRow);
+
+    rows = rows.filter(function(row) {
+      if (!passesCommonFilters(row, filters)) return false;
+      if (filters.status !== 'ALL' && rowStatus(row) !== filters.status) return false;
+      return true;
+    });
+
+    rows.sort(function(a, b) {
+      return new Date(b.createdAt || b.created_at || b.updatedAt || b.updated_at || 0) - new Date(a.createdAt || a.created_at || a.updatedAt || a.updated_at || 0);
+    });
+
+    return rows;
+  }
+
+  function getFilteredEmployees() {
+    var filters = recState.employeeFilters;
+    var rows = getTeamRows().slice();
+
+    rows = rows.filter(function(row) {
+      if (!passesCommonFilters(row, filters)) return false;
+      return isEmployeeStatusMatch(row, String(filters.status || 'ACTIVE'));
+    });
+
+    rows.sort(function(a, b) {
+      return new Date(b.updatedAt || b.updated_at || b.createdAt || b.created_at || 0) - new Date(a.updatedAt || a.updated_at || a.createdAt || a.created_at || 0);
+    });
+
+    return rows;
+  }
+
+  function injectStyle() {
+    if (byId('recruitmentClearviewStyleV19')) return;
+
+    var style = document.createElement('style');
+    style.id = 'recruitmentClearviewStyleV19';
+    style.textContent = '' +
+      '.center-column.recruitment-clearview-full{padding:0!important;min-height:calc(100vh - 180px)!important;align-items:stretch!important;justify-content:stretch!important;display:block!important}' +
+      '.center-column.recruitment-clearview-full .admin-workspace{box-shadow:none!important;border:0!important;border-radius:0!important;background:transparent!important;padding:0!important}' +
+      '.center-column.recruitment-clearview-full .admin-workspace-header{display:none!important}' +
+      '.rtc-page{display:grid;grid-template-rows:50px 44px 54px auto;gap:0;font-family:Arial,sans-serif;color:#111;background:#f5f5f5;border:1px solid #b8b8b8;border-radius:0;overflow:hidden;width:100%;min-height:calc(100vh - 190px)}' +
+      '.rtc-titlebar{display:flex;justify-content:space-between;align-items:center;gap:12px;background:#0070b8;color:#fff;padding:0 12px;height:50px;box-sizing:border-box}' +
+      '.rtc-titlebar h3{margin:0;color:#fff;font-size:1.55rem;font-weight:400;line-height:50px}' +
+      '.rtc-back-dashboard-btn{height:34px;width:170px;border:1px solid rgba(255,255,255,.75);background:#fff;color:#0070b8;border-radius:2px;font:inherit;font-weight:800;cursor:pointer;padding:0 12px;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;box-sizing:border-box}' +
+      '.rtc-back-dashboard-btn:hover{background:#f2f7fb}' +
+      '.rtc-tabs{display:flex;gap:0;border-bottom:1px solid #9f9f9f;background:#e5e5e5;overflow:hidden;height:44px;align-items:stretch;box-sizing:border-box}' +
+      '.rtc-tab{height:44px;width:210px;flex:0 0 210px;box-sizing:border-box;border:0;border-right:1px solid #bcbcbc;background:#e5e5e5;padding:0 12px;font:inherit;font-weight:700;cursor:pointer;color:#111;white-space:nowrap;display:inline-flex;align-items:center;justify-content:center;text-align:center;line-height:1}' +
+      '.rtc-tab.active{background:#fff;border-bottom:3px solid #0070b8;font-weight:800}' +
+      '.rtc-toolbar{display:flex;flex-wrap:nowrap;gap:8px;align-items:center;padding:10px;background:#eeeeee;border-bottom:1px solid #d5d5d5;height:54px;box-sizing:border-box;overflow:hidden}' +
+      '.rtc-btn{height:32px;width:120px;box-sizing:border-box;border:1px solid #888;background:#f7f7f7;color:#111;padding:0 12px;border-radius:2px;cursor:pointer;font:inherit;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap}' +
+      '.rtc-btn.primary{background:#0070b8;color:#fff;border-color:#005f9d}' +
+      '.rtc-btn.danger{color:#9b0000}' +
+      '.rtc-btn:disabled{opacity:.6;cursor:not-allowed}' +
+      '.rtc-section{background:#fff;border:1px solid #cfcfcf;margin:0 10px 10px}' +
+      '.rtc-section-title{background:#f8f8f8;border-bottom:2px solid #9f9f9f;padding:7px 8px;font-weight:700;color:#444}' +
+      '.rtc-form{display:grid;grid-template-columns:1fr 1fr;gap:12px 24px;padding:12px 18px 16px}' +
+      '.rtc-field{display:grid;grid-template-columns:160px minmax(180px,1fr);gap:8px;align-items:center}' +
+      '.rtc-field label{font-weight:700;text-align:right;font-size:.92rem}' +
+      '.rtc-required{color:red;margin-left:4px}' +
+      '.rtc-input,.rtc-select,.rtc-textarea{width:100%;min-height:28px;border:1px solid #bdbdbd;background:#ffffe5;padding:4px 6px;font:inherit;border-radius:2px;box-sizing:border-box}' +
+      '.rtc-select{background:#fff}' +
+      '.rtc-textarea{min-height:70px;resize:vertical}' +
+      '.rtc-wide{grid-column:1/-1}' +
+      '.rtc-form-actions{grid-column:1/-1;display:flex;gap:8px;justify-content:flex-end;padding-top:4px}' +
+      '.rtc-filter{display:grid;grid-template-columns:180px minmax(220px,1fr) 180px 160px 120px;gap:10px;align-items:end;background:#e5e5e5;border:1px solid #d1d1d1;margin:0 10px 10px;padding:10px}' +
+      '.rtc-filter label span{display:block;font-size:.78rem;color:#666;font-weight:700;margin-bottom:4px}' +
+      '.rtc-table-wrap{overflow-x:auto;background:#fff;border:1px solid #d9d9d9;margin:0 10px 10px}' +
+      '.rtc-table{width:100%;border-collapse:collapse;font-size:.92rem}' +
+      '.rtc-table th{padding:9px 8px;text-align:left;color:#555;background:#fff;border-bottom:2px solid #9f9f9f;text-decoration:underline;font-weight:400}' +
+      '.rtc-table td{padding:8px;border-bottom:1px solid #d9d9d9;color:#111;font-weight:400;vertical-align:middle}' +
+      '.rtc-table tbody tr:nth-child(even){background:#eeeeee}' +
+      '.rtc-table tbody tr:nth-child(odd){background:#ffffff}' +
+      '.rtc-name-btn{border:0;background:transparent;color:#0070b8;font:inherit;font-weight:700;cursor:pointer;padding:0;text-align:left}' +
+      '.rtc-name-btn:hover{text-decoration:underline}' +
+      '.rtc-click-row{cursor:pointer}' +
+      '.rtc-click-row:hover td{background:#f0f8ff}' +
+      '.rtc-status{display:inline-flex;padding:3px 8px;border-radius:999px;background:#e8f2ff;color:#1f6fb2;font-size:.76rem;white-space:nowrap}' +
+      '.rtc-status.good{background:#e8f7ed;color:#0f7d44}' +
+      '.rtc-status.warn{background:#fff5d6;color:#7a5b00}' +
+      '.rtc-status.bad{background:#fde8e8;color:#a10000}' +
+      '.rtc-action-row{display:grid;grid-template-columns:160px 180px 96px;gap:6px;align-items:center;min-width:450px}' +
+      '.rtc-action-row .rtc-select,.rtc-action-row .rtc-input{height:30px;min-height:30px}.rtc-empty{background:#fff;border:1px solid #d9d9d9;margin:0 10px 10px;padding:22px;color:#555}' +
+      '.rtc-message{font-weight:700;color:#0f7d44}' +
+      '.rtc-detail-row td{background:#f7f7f7!important;padding:12px!important}' +
+      '.rtc-detail{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;background:#fff;border:1px solid #ddd;padding:12px}' +
+      '.rtc-detail div span{display:block;color:#666;font-size:.78rem;font-weight:700;margin-bottom:3px}' +
+      '.rtc-toolbar #rtcNewHiringBtn{width:180px}' +
+      '.rtc-filter .rtc-btn{width:120px}' +
+      '.rtc-action-row .rtc-btn{width:96px}' +
+      '.rtc-pager{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin:0 10px 12px;padding:8px 0;color:#555;font-size:.9rem}' +
+      '.rtc-pager-info{margin-right:auto}' +
+      '.rtc-pager .rtc-btn{width:90px;height:30px}' +
+      '.rtc-tab,.rtc-btn,.rtc-back-dashboard-btn{transition:none!important}' +
+      '@media(max-width:900px){.rtc-form,.rtc-filter,.rtc-detail{grid-template-columns:1fr}.rtc-field{grid-template-columns:1fr}.rtc-field label{text-align:left}.rtc-action-row{grid-template-columns:1fr}.rtc-titlebar h3{font-size:1.3rem}}'
+      + '@media(max-width:640px){.rtc-filter{grid-template-columns:1fr}.rtc-tabs{overflow-x:auto;-webkit-overflow-scrolling:touch}.rtc-tab{min-width:130px;font-size:.82rem}.rtc-action-row{min-width:0;grid-template-columns:1fr}.rtc-action-row .rtc-btn{width:100%}.rtc-form-actions{justify-content:stretch;flex-direction:column}.rtc-table-wrap{overflow-x:auto}.rtc-table{min-width:580px}}';
+
+    document.head.appendChild(style);
+  }
+
+  function showWorkspace() {
+    injectStyle();
+
+    var centerColumn = document.querySelector('.center-column');
+    var newsletter = document.querySelector('.newsletter');
+    var workspace = (typeof adminWorkspace !== 'undefined' && adminWorkspace) ? adminWorkspace : byId('adminWorkspace');
+
+    if (centerColumn && workspace) {
+      centerColumn.innerHTML = '';
+      centerColumn.appendChild(workspace);
+      centerColumn.style.display = 'block';
+      centerColumn.classList.remove('manage-team-clearview-full');
+      centerColumn.classList.add('recruitment-clearview-full');
+    }
+
+    if (newsletter) newsletter.style.display = 'none';
+
+    if (workspace) {
+      workspace.hidden = false;
+      workspace.style.display = 'grid';
+    }
+
+    var adminHeader = workspace ? workspace.querySelector('.admin-workspace-header') : null;
+    if (adminHeader) adminHeader.style.display = 'none';
+
+    if (typeof adminWorkspaceEyebrow !== 'undefined' && adminWorkspaceEyebrow) adminWorkspaceEyebrow.textContent = '';
+    if (typeof adminWorkspaceTitle !== 'undefined' && adminWorkspaceTitle) adminWorkspaceTitle.textContent = '';
+    if (typeof adminWorkspaceNote !== 'undefined' && adminWorkspaceNote) adminWorkspaceNote.textContent = '';
+    if (typeof adminSummaryGrid !== 'undefined' && adminSummaryGrid) adminSummaryGrid.innerHTML = '';
+    if (typeof adminSectionTabs !== 'undefined' && adminSectionTabs) adminSectionTabs.innerHTML = '';
+  }
+
+  function tabButton(key, label) {
+    return '<button class="rtc-tab' + (recState.tab === key ? ' active' : '') + '" type="button" data-rtc-tab="' + attr(key) + '">' + esc(label) + '</button>';
+  }
+
+  function getHtml() {
+    return '' +
+      '<section class="rtc-page" id="recruitmentClearviewPage">' +
+        '<div class="rtc-titlebar"><h3>Recruitment</h3><button class="rtc-back-dashboard-btn" id="rtcBackDashboardBtn" type="button">Back to Dashboard</button></div>' +
+        '<div class="rtc-tabs">' +
+          tabButton('NEW_HEROES', 'New Heroes') +
+          tabButton('HIRING_REQUEST', 'Hiring Request') +
+          tabButton('EMPLOYEE_LIST', 'Employee List') +
+        '</div>' +
+        getToolbarHtml() +
+        '<div id="rtcMainContent">' + getContentHtml() + '</div>' +
+      '</section>';
+  }
+
+  function getToolbarHtml() {
+    if (recState.tab === 'HIRING_REQUEST') {
+      return '' +
+        '<div class="rtc-toolbar">' +
+          '<button class="rtc-btn primary" id="rtcNewHiringBtn" type="button">New Hiring Request</button>' +
+          '<button class="rtc-btn" id="rtcRefreshBtn" type="button">Refresh</button>' +
+          '<span style="flex:1"></span>' +
+          '<span class="rtc-message" id="rtcMessage"></span>' +
+        '</div>';
+    }
+
+    return '' +
+      '<div class="rtc-toolbar">' +
+        '<button class="rtc-btn primary" id="rtcRefreshBtn" type="button">Refresh</button>' +
+        '<button class="rtc-btn" id="rtcExportBtn" type="button">Export</button>' +
+        '<span style="flex:1"></span>' +
+        '<span class="rtc-message" id="rtcMessage"></span>' +
+      '</div>';
+  }
+
+  function getContentHtml() {
+    if (recState.tab === 'HIRING_REQUEST') return getHiringContentHtml();
+    if (recState.tab === 'EMPLOYEE_LIST') return getEmployeeListContentHtml();
+    return getNewHeroesContentHtml();
+  }
+
+  function getNewHeroFilterHtml() {
+    var filters = recState.newHeroFilters;
+    return '' +
+      '<div class="rtc-filter">' +
+        '<label><span>Restaurant</span><select class="rtc-select" id="rtcFilterRestaurant">' + restaurantOptions(filters.restaurant, true) + '</select></label>' +
+        '<label><span>Search</span><input class="rtc-input" id="rtcSearch" type="text" placeholder="Search name or mobile" value="' + attr(filters.search) + '"></label>' +
+        '<label><span>Status</span><select class="rtc-select" id="rtcFilterStatus">' + statusOptionsHtml(newHeroActionStatuses(), filters.status, 'All Status') + '</select></label>' +
+        '<label><span>Show</span><select class="rtc-select" id="rtcLimit">' + pageSizeOptions(filters.limit) + '</select></label>' +
+        '<button class="rtc-btn" id="rtcApplyFilterBtn" type="button">Apply</button>' +
+      '</div>';
+  }
+
+  function getEmployeeFilterHtml() {
+    var filters = recState.employeeFilters;
+    return '' +
+      '<div class="rtc-filter">' +
+        '<label><span>Restaurant</span><select class="rtc-select" id="rtcEmployeeRestaurant">' + restaurantOptions(filters.restaurant, true) + '</select></label>' +
+        '<label><span>Search</span><input class="rtc-input" id="rtcEmployeeSearch" type="text" placeholder="Search name or mobile" value="' + attr(filters.search) + '"></label>' +
+        '<label><span>Status</span><select class="rtc-select" id="rtcEmployeeStatus">' + statusOptionsHtml(employeeFilterStatuses(), filters.status, 'All Status') + '</select></label>' +
+        '<label><span>Show</span><select class="rtc-select" id="rtcEmployeeLimit">' + pageSizeOptions(filters.limit) + '</select></label>' +
+        '<button class="rtc-btn" id="rtcEmployeeApplyBtn" type="button">Apply</button>' +
+      '</div>';
+  }
+
+  function getNewHeroesContentHtml() {
+    if (recState.loadingTeam || !recState.teamData) return '<div class="rtc-empty">Loading New Heroes...</div>';
+    return getNewHeroFilterHtml() + '<div class="rtc-section-title" style="margin:0 10px 0">New Heroes</div>' + getNewHeroesTableHtml();
+  }
+
+  function getEmployeeListContentHtml() {
+    if (recState.loadingTeam || !recState.teamData) return '<div class="rtc-empty">Loading Employee List...</div>';
+    return getEmployeeFilterHtml() + '<div class="rtc-section-title" style="margin:0 10px 0">Employee List</div>' + getEmployeeListTableHtml();
+  }
+
+  function statusClass(status) {
+    status = normalizeStatus(status);
+    if (status === 'ACTIVE' || status === 'Work Started') return 'good';
+    if (status === 'Quit' || status === 'Didnt Show Up' || status === 'INACTIVE') return 'bad';
+    return 'warn';
+  }
+
+  function getNewHeroesTableHtml() {
+    var rows = getFilteredNewHeroes();
+    if (!rows.length) return '<div class="rtc-table-wrap"><table class="rtc-table"><tbody><tr><td>No new heroes found for the selected filter.</td></tr></tbody></table></div>';
+    var pageRows = getPageSlice(rows, 'newHeroPage', recState.newHeroFilters);
+
+    var htmlRows = pageRows.map(function(row) {
+      var id = String(row.teamMemberId || row.team_member_id || row.id || '').trim();
+      var name = row.name || row.full_name || row.fullName || '';
+      var mobile = row.mobile || row.phone || '';
+      var status = rowStatus(row);
+      var restaurantCode = employeeRestaurantCode(row);
+      var hiredDate = row.hiredDate || row.hire_date || row.hireDate || '';
+      var isOpen = !!recState.openDetails[id];
+
+      return '' +
+        '<tr class="rtc-click-row" data-rtc-row-detail="' + attr(id) + '">' +
+          '<td><button class="rtc-name-btn" type="button" data-rtc-detail="' + attr(id) + '">' + esc(name) + '</button></td>' +
+          '<td>' + esc(mobile) + '</td>' +
+          '<td><span class="rtc-status ' + statusClass(status) + '">' + esc(status) + '</span></td>' +
+          '<td>' + esc(restaurantCode) + '</td>' +
+          '<td>' + esc(formatDate(hiredDate)) + '</td>' +
+          '<td>' + getNewHeroActionHtml(id, status) + '</td>' +
+        '</tr>' +
+        (isOpen ? getEmployeeDetailRow(row, id, 6) : '');
+    }).join('');
+
+    return '<div class="rtc-table-wrap"><table class="rtc-table"><thead><tr><th>Name</th><th>Mobile Number</th><th>Status</th><th>Restaurant Number</th><th>Hired Date</th><th>Action</th></tr></thead><tbody>' + htmlRows + '</tbody></table></div>' + pagerHtml(rows.length, 'newHeroPage', recState.newHeroFilters, 'newHeroes');
+  }
+
+  function getEmployeeListTableHtml() {
+    var rows = getFilteredEmployees();
+    if (!rows.length) return '<div class="rtc-table-wrap"><table class="rtc-table"><tbody><tr><td>No employees found for the selected filter.</td></tr></tbody></table></div>';
+    var pageRows = getPageSlice(rows, 'employeePage', recState.employeeFilters);
+
+    var htmlRows = pageRows.map(function(row) {
+      var id = String(row.teamMemberId || row.team_member_id || row.id || '').trim();
+      var name = row.name || row.full_name || row.fullName || '';
+      var mobile = row.mobile || row.phone || '';
+      var status = rowStatus(row);
+      var outcome = rowOutcome(row);
+      var displayStatus = status === 'ACTIVE' && outcome === 'Work Started' ? 'ACTIVE' : status;
+      var restaurantCode = employeeRestaurantCode(row);
+      var hiredDate = row.hiredDate || row.hire_date || row.hireDate || '';
+      var updatedAt = row.completedAt || row.recruitment_completed_at || row.updatedAt || row.updated_at || '';
+      var isOpen = !!recState.openDetails[id];
+
+      return '' +
+        '<tr class="rtc-click-row" data-rtc-row-detail="' + attr(id) + '">' +
+          '<td><button class="rtc-name-btn" type="button" data-rtc-detail="' + attr(id) + '">' + esc(name) + '</button></td>' +
+          '<td>' + esc(mobile) + '</td>' +
+          '<td><span class="rtc-status ' + statusClass(displayStatus) + '">' + esc(displayStatus) + '</span></td>' +
+          '<td>' + esc(restaurantCode) + '</td>' +
+          '<td>' + esc(formatDate(hiredDate)) + '</td>' +
+          '<td>' + esc(formatDate(updatedAt)) + '</td>' +
+        '</tr>' +
+        (isOpen ? getEmployeeDetailRow(row, id, 6) : '');
+    }).join('');
+
+    return '<div class="rtc-table-wrap"><table class="rtc-table"><thead><tr><th>Name</th><th>Mobile Number</th><th>Status</th><th>Restaurant Number</th><th>Hired Date</th><th>Last Updated</th></tr></thead><tbody>' + htmlRows + '</tbody></table></div>' + pagerHtml(rows.length, 'employeePage', recState.employeeFilters, 'employees');
+  }
+
+  function getNewHeroActionHtml(id, status) {
+    return '' +
+      '<div class="rtc-action-row">' +
+        '<select class="rtc-select" data-rtc-status-id="' + attr(id) + '">' + newHeroActionStatuses().map(function(statusOption) { return optionHtml(statusOption, statusOption, status); }).join('') + '</select>' +
+        '<input class="rtc-input" data-rtc-reason-id="' + attr(id) + '" type="text" placeholder="Reason if needed">' +
+        '<button class="rtc-btn primary" type="button" data-rtc-save-status="' + attr(id) + '">Save</button>' +
+      '</div>';
+  }
+
+  function getEmployeeDetailRow(row, id, colspan) {
+    var status = rowStatus(row);
+    var outcome = rowOutcome(row);
+
+    return '' +
+      '<tr class="rtc-detail-row"><td colspan="' + attr(colspan || 6) + '">' +
+        '<div class="rtc-detail">' +
+          detailCell('Name', row.name || row.full_name || row.fullName || '') +
+          detailCell('Mobile', row.mobile || row.phone || '') +
+          detailCell('Status', status) +
+          detailCell('Restaurant Number', employeeRestaurantCode(row)) +
+          detailCell('Assigned Restaurant', employeeRestaurantLabel(row)) +
+          detailCell('Hired Date', formatDate(row.hiredDate || row.hire_date || '')) +
+          detailCell('Outcome', outcome) +
+          detailCell('Reason or Notes', row.quitReason || row.recruitment_reason || row.notes || '') +
+          detailCell('Work Started Date', formatDate(row.completedAt || row.recruitment_completed_at || '')) +
+          detailCell('Last Updated', formatDate(row.updatedAt || row.updated_at || '')) +
+        '</div>' +
+      '</td></tr>';
+  }
+
+  function detailCell(label, value) {
+    return '<div><span>' + esc(label) + '</span>' + esc(value || '') + '</div>';
+  }
+
+  function fieldHtml(id, label, type, required, placeholder) {
+    return '<div class="rtc-field"><label>' + esc(label) + (required ? '<span class="rtc-required">*</span>' : '') + '</label><input class="rtc-input" id="' + attr(id) + '" type="' + attr(type || 'text') + '" placeholder="' + attr(placeholder || '') + '"></div>';
+  }
+
+  function getHiringContentHtml() {
+    if (recState.loadingHiring || !recState.hiringData) return '<div class="rtc-empty">Loading Hiring Request workspace...</div>';
+
+    return '' +
+      '<div class="rtc-section" id="rtcHiringFormSection">' +
+        '<div class="rtc-section-title">New Hiring Request</div>' +
+        '<form class="rtc-form" id="rtcHiringForm">' +
+          fieldHtml('rtcHrName', 'Name', 'text', true, 'Your name') +
+          '<div class="rtc-field"><label>Restaurant<span class="rtc-required">*</span></label><select class="rtc-select" id="rtcHrRestaurant">' + restaurantOptions('', false) + '</select></div>' +
+          '<div class="rtc-field"><label>Position needed<span class="rtc-required">*</span></label><select class="rtc-select" id="rtcHrPosition"><option value="">Not Selected</option><option>Team Member</option><option>Baker</option><option>Midnight Baker</option><option>Other</option></select></div>' +
+          '<div class="rtc-field"><label>Full time or part time<span class="rtc-required">*</span></label><select class="rtc-select" id="rtcHrType"><option value="">Not Selected</option><option>Full time</option><option>Part time</option><option>Either</option></select></div>' +
+          '<div class="rtc-field"><label>Availability<span class="rtc-required">*</span></label><select class="rtc-select" id="rtcHrAvailability"><option value="">Not Selected</option><option>Weekdays</option><option>Weekends only</option><option>Manual entry</option></select></div>' +
+          '<div class="rtc-field"><label>Number Needed<span class="rtc-required">*</span></label><input class="rtc-input" id="rtcHrNumber" type="number" min="1" value="1"></div>' +
+          '<div class="rtc-field rtc-wide"><label>Other Notes</label><textarea class="rtc-textarea" id="rtcHrNotes" placeholder="Manual availability or other notes"></textarea></div>' +
+          '<div class="rtc-field rtc-wide"><label>Reason<span class="rtc-required">*</span></label><textarea class="rtc-textarea" id="rtcHrReason" placeholder="Why this hiring request is needed"></textarea></div>' +
+          '<div class="rtc-form-actions"><button class="rtc-btn primary" id="rtcHrSaveBtn" type="submit">Submit</button><button class="rtc-btn" id="rtcHrClearBtn" type="button">Clear</button></div>' +
+        '</form>' +
+      '</div>' +
+      getHiringFilterHtml() +
+      '<div class="rtc-section-title" style="margin:0 10px 0">Hiring Requests</div>' +
+      getHiringTableHtml();
+  }
+
+  function getHiringFilterHtml() {
+    var filters = recState.hiringFilters;
+    return '' +
+      '<div class="rtc-filter">' +
+        '<label><span>Restaurant</span><select class="rtc-select" id="rtcHiringFilterRestaurant">' + restaurantOptions(filters.restaurant, true) + '</select></label>' +
+        '<label><span>Search</span><input class="rtc-input" id="rtcHiringSearch" type="text" placeholder="Search request" value="' + attr(filters.search) + '"></label>' +
+        '<label><span>Status</span><select class="rtc-select" id="rtcHiringFilterStatus">' + optionHtml('ALL', 'All Status', filters.status) + optionHtml('PENDING', 'Pending', filters.status) + optionHtml('APPROVED', 'Approved', filters.status) + optionHtml('REJECTED', 'Rejected', filters.status) + optionHtml('COMPLETED', 'Completed', filters.status) + '</select></label>' +
+        '<label><span>Show</span><select class="rtc-select" id="rtcHiringLimit">' + pageSizeOptions(filters.limit) + '</select></label>' +
+        '<button class="rtc-btn" id="rtcHiringApplyBtn" type="button">Apply</button>' +
+      '</div>';
+  }
+
+  function getFilteredHiringRequests() {
+    var data = recState.hiringData || {};
+    var rows = (data.requests || []).slice();
+    var filters = recState.hiringFilters;
+    var restaurant = String(filters.restaurant || 'ALL');
+    var status = String(filters.status || 'ALL').toUpperCase();
+    var search = String(filters.search || '').toLowerCase();
+
+    rows = rows.filter(function(row) {
+      if (restaurant !== 'ALL') {
+        var rowRestaurant = String(row.restaurantId || row.restaurant_id || row.restaurantCode || row.restaurant_code || '');
+        if (rowRestaurant !== restaurant) return false;
+      }
+
+      if (status !== 'ALL' && String(row.status || '').toUpperCase() !== status) return false;
+
+      if (search) {
+        var haystack = [row.requestId, row.restaurantCode, row.restaurantName, row.requesterName, row.position, row.employmentType, row.availability, row.reason, row.notes, row.status].join(' ').toLowerCase();
+        if (haystack.indexOf(search) === -1) return false;
+      }
+
+      return true;
+    });
+
+    rows.sort(function(a, b) {
+      return new Date(b.createdAt || b.submittedAt || 0) - new Date(a.createdAt || a.submittedAt || 0);
+    });
+
+    return rows;
+  }
+
+  function getHiringTableHtml() {
+    var rows = getFilteredHiringRequests();
+    if (!rows.length) return '<div class="rtc-table-wrap"><table class="rtc-table"><tbody><tr><td>No hiring requests found.</td></tr></tbody></table></div>';
+    var pageRows = getPageSlice(rows, 'hiringPage', recState.hiringFilters);
+
+    var htmlRows = pageRows.map(function(row) {
+      return '<tr>' +
+        '<td>' + esc(formatDate(row.createdAt || row.submittedAt || '')) + '</td>' +
+        '<td>' + esc(row.restaurantCode || row.restaurantId || '') + '</td>' +
+        '<td>' + esc(row.requesterName || '') + '</td>' +
+        '<td>' + esc(row.position || '') + '</td>' +
+        '<td>' + esc(row.employmentType || '') + '</td>' +
+        '<td>' + esc(row.availability || '') + '</td>' +
+        '<td>' + esc(row.numberNeeded || '') + '</td>' +
+        '<td><span class="rtc-status ' + statusClass(row.status || '') + '">' + esc(row.status || '') + '</span></td>' +
+      '</tr>';
+    }).join('');
+
+    return '<div class="rtc-table-wrap"><table class="rtc-table"><thead><tr><th>Date</th><th>Restaurant</th><th>Requester</th><th>Position</th><th>Type</th><th>Availability</th><th>Needed</th><th>Status</th></tr></thead><tbody>' + htmlRows + '</tbody></table></div>' + pagerHtml(rows.length, 'hiringPage', recState.hiringFilters, 'hiring');
+  }
+
+  function render() {
+    showWorkspace();
+    var workspace = (typeof adminWorkspace !== 'undefined' && adminWorkspace) ? adminWorkspace : byId('adminWorkspace');
+    if (!workspace) return;
+
+    workspace.innerHTML = getHtml();
+    bindEvents();
+  }
+
+  function applyNewHeroFilters() {
+    var f = recState.newHeroFilters;
+    var restaurant = byId('rtcFilterRestaurant');
+    var search = byId('rtcSearch');
+    var status = byId('rtcFilterStatus');
+    var limit = byId('rtcLimit');
+
+    f.restaurant = restaurant ? restaurant.value || 'ALL' : 'ALL';
+    f.search = search ? search.value || '' : '';
+    f.status = status ? status.value || 'ALL' : 'ALL';
+    f.limit = limit ? limit.value || '10' : '10';
+    recState.newHeroPage = 1;
+    recState.openDetails = {};
+
+    render();
+  }
+
+  function applyEmployeeFilters() {
+    recState.employeeFilters = recState.employeeFilters || {
+      restaurant: 'ALL',
+      search: '',
+      status: 'ACTIVE',
+      limit: '10'
+    };
+
+    var f = recState.employeeFilters;
+    var restaurant = byId('rtcEmployeeRestaurant');
+    var search = byId('rtcEmployeeSearch');
+    var status = byId('rtcEmployeeStatus');
+    var limit = byId('rtcEmployeeLimit');
+
+    f.restaurant = restaurant ? String(restaurant.value || 'ALL') : 'ALL';
+    f.search = search ? String(search.value || '') : '';
+    f.status = status ? String(status.value || 'ACTIVE') : 'ACTIVE';
+    f.limit = limit ? String(limit.value || '10') : '10';
+    recState.employeePage = 1;
+    recState.openDetails = {};
+
+    render();
+  }
+
+  function applyHiringFilters() {
+    var f = recState.hiringFilters;
+    var restaurant = byId('rtcHiringFilterRestaurant');
+    var search = byId('rtcHiringSearch');
+    var status = byId('rtcHiringFilterStatus');
+    var limit = byId('rtcHiringLimit');
+
+    f.restaurant = restaurant ? restaurant.value || 'ALL' : 'ALL';
+    f.search = search ? search.value || '' : '';
+    f.status = status ? status.value || 'ALL' : 'ALL';
+    f.limit = limit ? limit.value || '10' : '10';
+    recState.newHeroPage = 1;
+    recState.openDetails = {};
+
+    render();
+  }
+
+  function bindEvents() {
+    document.querySelectorAll('[data-rtc-tab]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        recState.tab = btn.getAttribute('data-rtc-tab');
+        recState.openDetails = {};
+        render();
+        if (recState.tab === 'HIRING_REQUEST' && !recState.hiringData) loadHiringData(false);
+      });
+    });
+
+    var back = byId('rtcBackDashboardBtn');
+    if (back) back.addEventListener('click', backToDashboard);
+
+    var refresh = byId('rtcRefreshBtn');
+    if (refresh) refresh.addEventListener('click', function() {
+      if (recState.tab === 'HIRING_REQUEST') loadHiringData(true);
+      else loadTeamData(true);
+    });
+
+    var exportBtn = byId('rtcExportBtn');
+    if (exportBtn) exportBtn.addEventListener('click', exportCurrentTable);
+
+    var apply = byId('rtcApplyFilterBtn');
+    if (apply) apply.addEventListener('click', function(event) {
+      event.preventDefault();
+      applyNewHeroFilters();
+    });
+
+    var search = byId('rtcSearch');
+    if (search) {
+      search.addEventListener('input', function() {
+        recState.newHeroFilters.search = search.value || '';
+      });
+      search.addEventListener('keydown', function(event) {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          applyNewHeroFilters();
+        }
+      });
+    }
+
+    ['rtcFilterRestaurant', 'rtcFilterStatus', 'rtcLimit'].forEach(function(id) {
+      var el = byId(id);
+      if (el) el.addEventListener('change', applyNewHeroFilters);
+    });
+
+    var empApply = byId('rtcEmployeeApplyBtn');
+    if (empApply) empApply.addEventListener('click', function(event) {
+      event.preventDefault();
+      applyEmployeeFilters();
+    });
+
+    var empSearch = byId('rtcEmployeeSearch');
+    if (empSearch) {
+      empSearch.addEventListener('input', function() {
+        recState.employeeFilters.search = empSearch.value || '';
+      });
+      empSearch.addEventListener('keydown', function(event) {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          applyEmployeeFilters();
+        }
+      });
+    }
+
+    ['rtcEmployeeRestaurant', 'rtcEmployeeStatus', 'rtcEmployeeLimit'].forEach(function(id) {
+      var el = byId(id);
+      if (el) el.addEventListener('change', applyEmployeeFilters);
+    });
+
+    var hiringApply = byId('rtcHiringApplyBtn');
+    if (hiringApply) hiringApply.addEventListener('click', function(event) {
+      event.preventDefault();
+      applyHiringFilters();
+    });
+
+    var hiringSearch = byId('rtcHiringSearch');
+    if (hiringSearch) {
+      hiringSearch.addEventListener('input', function() {
+        recState.hiringFilters.search = hiringSearch.value || '';
+      });
+      hiringSearch.addEventListener('keydown', function(event) {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          applyHiringFilters();
+        }
+      });
+    }
+
+    ['rtcHiringFilterRestaurant', 'rtcHiringFilterStatus', 'rtcHiringLimit'].forEach(function(id) {
+      var el = byId(id);
+      if (el) el.addEventListener('change', applyHiringFilters);
+    });
+
+
+    document.querySelectorAll('[data-rtc-page]').forEach(function(btn) {
+      btn.addEventListener('click', function(event) {
+        event.preventDefault();
+        var target = btn.getAttribute('data-rtc-page');
+        var dir = btn.getAttribute('data-dir') === 'next' ? 1 : -1;
+        if (target === 'newHeroes') recState.newHeroPage = Math.max(1, Number(recState.newHeroPage || 1) + dir);
+        if (target === 'employees') recState.employeePage = Math.max(1, Number(recState.employeePage || 1) + dir);
+        if (target === 'hiring') recState.hiringPage = Math.max(1, Number(recState.hiringPage || 1) + dir);
+        recState.openDetails = {};
+        render();
+      });
+    });
+
+    var form = byId('rtcHiringForm');
+    if (form) {
+      form.addEventListener('submit', function(event) {
+        event.preventDefault();
+        saveHiringRequest(byId('rtcHrSaveBtn'));
+      });
+    }
+
+    var clearBtn = byId('rtcHrClearBtn');
+    if (clearBtn) clearBtn.addEventListener('click', clearHiringForm);
+
+    var newHiringBtn = byId('rtcNewHiringBtn');
+    if (newHiringBtn) {
+      newHiringBtn.addEventListener('click', function() {
+        var section = byId('rtcHiringFormSection');
+        if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    }
+
+    document.querySelectorAll('[data-rtc-row-detail]').forEach(function(row) {
+      row.addEventListener('click', function(event) {
+        if (event.target.closest('button, select, input, textarea')) return;
+        var id = row.getAttribute('data-rtc-row-detail');
+        recState.openDetails[id] = !recState.openDetails[id];
+        render();
+      });
+    });
+
+    document.querySelectorAll('[data-rtc-detail]').forEach(function(btn) {
+      btn.addEventListener('click', function(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        var id = btn.dataset.rtcDetail;
+        recState.openDetails[id] = !recState.openDetails[id];
+        render();
+      });
+    });
+
+    document.querySelectorAll('[data-rtc-save-status]').forEach(function(btn) {
+      btn.addEventListener('click', function(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        saveNewHeroStatus(btn);
+      });
+    });
+  }
+
+  function loadTeamData(force) {
+    if (recState.teamData && !force) {
+      render();
+      return;
+    }
+
+    recState.loadingTeam = true;
+    render();
+
+    google.script.run
+      .withSuccessHandler(function(res) {
+        recState.loadingTeam = false;
+        if (!res || !res.success) {
+          notify((res && res.error) || 'Could not load recruitment data.', 'error');
+          render();
+          return;
+        }
+        recState.teamData = res.data || {};
+        recState.newHeroPage = 1;
+        recState.employeePage = 1;
+        render();
+      })
+      .withFailureHandler(function(error) {
+        recState.loadingTeam = false;
+        notify(error && error.message ? error.message : 'Could not load recruitment data.', 'error');
+        render();
+      })
+      .getNewHeroEmployees(getToken());
+  }
+
+  function loadHiringData(force) {
+    if (recState.hiringData && !force) {
+      render();
+      return;
+    }
+
+    recState.loadingHiring = true;
+    render();
+
+    google.script.run
+      .withSuccessHandler(function(res) {
+        recState.loadingHiring = false;
+        if (!res || !res.success) {
+          notify((res && res.error) || 'Could not load hiring requests.', 'error');
+          render();
+          return;
+        }
+        recState.hiringData = res.data || {};
+        recState.hiringPage = 1;
+        render();
+      })
+      .withFailureHandler(function(error) {
+        recState.loadingHiring = false;
+        notify(error && error.message ? error.message : 'Could not load hiring requests.', 'error');
+        render();
+      })
+      .getHiringRequestWorkspaceData(getToken());
+  }
+
+  function saveNewHeroStatus(btn) {
+    var id = btn.getAttribute('data-rtc-save-status');
+    var statusEl = document.querySelector('[data-rtc-status-id="' + cssEscape(id) + '"]');
+    var reasonEl = document.querySelector('[data-rtc-reason-id="' + cssEscape(id) + '"]');
+    var status = statusEl ? statusEl.value : '';
+    var reason = reasonEl ? reasonEl.value : '';
+
+    if (!id || !status) {
+      notify('Select status.', 'error');
+      return;
+    }
+
+    if (status === 'Quit' && !String(reason || '').trim()) {
+      notify('Quit reason is required.', 'error');
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+
+    google.script.run
+      .withSuccessHandler(function(res) {
+        btn.disabled = false;
+        btn.textContent = 'Save';
+        if (!res || !res.success) {
+          notify((res && res.error) || 'Could not update status.', 'error');
+          return;
+        }
+        notify('Status updated.', 'success');
+        loadTeamData(true);
+      })
+      .withFailureHandler(function(error) {
+        btn.disabled = false;
+        btn.textContent = 'Save';
+        notify(error && error.message ? error.message : 'Could not update status.', 'error');
+      })
+      .updateNewHeroRecruitmentStatus({
+        sessionToken: getToken(),
+        id: id,
+        status: status,
+        quitReason: reason
+      });
+  }
+
+  function cssEscape(value) {
+    value = String(value || '');
+    if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(value);
+    return value.replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+  }
+
+  function saveHiringRequest(btn) {
+    var payload = {
+      sessionToken: getToken(),
+      requesterName: valueOf('rtcHrName'),
+      restaurantId: valueOf('rtcHrRestaurant'),
+      position: valueOf('rtcHrPosition'),
+      employmentType: valueOf('rtcHrType'),
+      availability: valueOf('rtcHrAvailability'),
+      numberNeeded: valueOf('rtcHrNumber'),
+      notes: valueOf('rtcHrNotes'),
+      reason: valueOf('rtcHrReason')
+    };
+
+    if (!payload.requesterName || !payload.restaurantId || !payload.position || !payload.employmentType || !payload.availability || !payload.numberNeeded || !payload.reason) {
+      notify('Please fill all required fields.', 'error');
+      return;
+    }
+
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Saving...';
+    }
+
+    google.script.run
+      .withSuccessHandler(function(res) {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Submit';
+        }
+        if (!res || !res.success) {
+          notify((res && res.error) || 'Could not submit hiring request.', 'error');
+          return;
+        }
+        notify('Hiring request submitted.', 'success');
+        clearHiringForm();
+        loadHiringData(true);
+      })
+      .withFailureHandler(function(error) {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Submit';
+        }
+        notify(error && error.message ? error.message : 'Could not submit hiring request.', 'error');
+      })
+      .createHiringRequest(payload);
+  }
+
+  function valueOf(id) {
+    var el = byId(id);
+    return el ? String(el.value || '').trim() : '';
+  }
+
+  function clearHiringForm() {
+    ['rtcHrName', 'rtcHrRestaurant', 'rtcHrPosition', 'rtcHrType', 'rtcHrAvailability', 'rtcHrNumber', 'rtcHrNotes', 'rtcHrReason'].forEach(function(id) {
+      var el = byId(id);
+      if (!el) return;
+      if (id === 'rtcHrNumber') el.value = '1';
+      else el.value = '';
+    });
+  }
+
+  function exportCurrentTable() {
+    var rows;
+    if (recState.tab === 'EMPLOYEE_LIST') rows = getFilteredEmployees();
+    else if (recState.tab === 'HIRING_REQUEST') rows = getFilteredHiringRequests();
+    else rows = getFilteredNewHeroes();
+
+    if (!rows.length) {
+      notify('No rows to export.', 'error');
+      return;
+    }
+
+    var csv = ['Name,Mobile,Status,Restaurant,Hired Date,Last Updated'];
+    rows.forEach(function(row) {
+      csv.push([
+        row.name || row.full_name || row.fullName || '',
+        row.mobile || row.phone || '',
+        rowStatus(row),
+        employeeRestaurantCode(row),
+        formatDate(row.hiredDate || row.hire_date || row.hireDate || ''),
+        formatDate(row.completedAt || row.recruitment_completed_at || row.updatedAt || row.updated_at || '')
+      ].map(csvCell).join(','));
+    });
+
+    var blob = new Blob([csv.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'recruitment-export.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function csvCell(value) {
+    return '"' + String(value == null ? '' : value).replace(/"/g, '""') + '"';
+  }
+
+  // FIX #10: goBackToDashboardHome is not always defined. Added safe fallback
+  // chain so back-navigation never silently fails.
+  function backToDashboard() {
+    try {
+      var centerColumn = document.querySelector('.center-column');
+      if (centerColumn) centerColumn.classList.remove('recruitment-clearview-full');
+
+      if (typeof goBackToDashboardHome === 'function') {
+        goBackToDashboardHome();
+        return;
+      }
+
+      if (typeof restoreDashboardHomeLayout_ === 'function') {
+        restoreDashboardHomeLayout_();
+        return;
+      }
+    } catch (error) {
+      console.warn('backToDashboard fallback triggered:', error);
+    }
+
+    // Last resort: reload the page
+    window.location.reload();
+  }
+
+  function openRecruitmentPanel() {
+    recState.tab = recState.tab || 'NEW_HEROES';
+    showWorkspace();
+    render();
+    loadTeamData(false);
+    if (recState.tab === 'HIRING_REQUEST') loadHiringData(false);
+  }
+
+  window.openRecruitmentPanel_ = openRecruitmentPanel;
+  window.openRecruitmentCleanV248_ = openRecruitmentPanel;
+  window.renderRecruitmentPanel_ = render;
+  window.__recruitmentJSLoaded = true;
+  window.__recruitmentClearviewReadyV366 = true;
+})();
+
+/* Recruitment status cleanup V19 */
+(function recruitmentStatusCleanupV19_() {
+  function userStatus(value) {
+    var text = String(value || '').trim();
+    var upper = text.toUpperCase().replace(/['']/g, '').replace(/[_\-]+/g, ' ').replace(/\s+/g, ' ').trim();
+    if (upper === 'ACTIVE') return 'ACTIVE';
+    if (upper === 'INACTIVE' || upper === 'DEACTIVATED' || upper === 'FORMER STAFF') return 'INACTIVE';
+    if (upper === 'READY TO WORK' || upper === 'READY TO START') return 'Ready to Start';
+    if (upper === 'WELCOME KIT DONE') return 'Welcome Kit Done';
+    if (upper === 'WORK STARTED' || upper === 'ALREADY STARTED') return 'Work Started';
+    if (upper === 'DIDNT SHOW UP' || upper === 'DID NOT SHOW UP' || upper === "DIDN'T SHOW UP") return 'Didnt Show Up';
+    if (upper === 'QUIT') return 'Quit';
+    return text;
+  }
+
+  function serverStatus(value) {
+    return userStatus(value);
+  }
+
+  window.normalizeRecruitmentManageTeamStatusV333_ = userStatus;
+  window.normalizeRecruitmentManageTeamServerStatusV333_ = serverStatus;
+})();
+
+/* Recruitment Clearview only safety V366 */
+(function recruitmentClearviewOnlyV366_() {
+  window.__recruitmentClearviewReadyV366 = true;
+  if (typeof window.openRecruitmentPanel_ === 'function') {
+    window.openRecruitmentPanel_.__clearviewV366 = true;
+  }
+  window.openRecruitmentCleanV248_ = function() {
+    if (typeof window.openRecruitmentPanel_ === 'function') {
+      return window.openRecruitmentPanel_();
+    }
+  };
+})();
+</script>

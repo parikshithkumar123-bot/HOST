@@ -1,0 +1,1347 @@
+<script>
+(function manageTeamClearviewPatch() {
+  var mtState = {
+    restaurants: [],
+    members: [],
+    transferHistory: [],
+    tab: 'ADD',
+    viewLimit: 10,
+    page: 1,
+    openMemberId: '',
+    editMemberId: '',
+    filters: {
+      search: '',
+      restaurant: 'ALL',
+      status: 'ALL'
+    }
+  };
+
+  var TRACKING_STATUSES = ['Ready to Start', 'Welcome Kit Done', 'Work Started', 'Did Not Show Up', 'Didnt Show Up', 'Quit'];
+  var ALL_STATUS_OPTIONS = ['ALL', 'ACTIVE', 'Ready to Start', 'Welcome Kit Done', 'Work Started', 'Did Not Show Up', 'Didnt Show Up', 'Quit', 'INACTIVE'];
+  var NEW_HERO_STATUS_OPTIONS = ['Ready to Start', 'Welcome Kit Done', 'Work Started', 'Did Not Show Up', 'Quit'];
+
+  function byId(id) {
+    return document.getElementById(id);
+  }
+
+  function token_() {
+    if (typeof getSessionToken_ === 'function') return getSessionToken_();
+    try {
+      return (state && state.session && state.session.token) || sessionStorage.getItem('portalSessionToken') || '';
+    } catch (error) {
+      return '';
+    }
+  }
+
+  function esc(value) {
+    if (typeof escapeHtml === 'function') return escapeHtml(value);
+    return String(value == null ? '' : value).replace(/[&<>\"]/g, function(ch) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch];
+    });
+  }
+
+  function attr(value) {
+    return esc(value).replace(/'/g, '&#39;');
+  }
+
+  function normalizeStatus(value) {
+    var status = String(value || '').trim();
+    if (status === 'Active') return 'ACTIVE';
+    if (status === 'Inactive') return 'INACTIVE';
+    if (status === 'Ready to Start') return 'Ready to Start';
+    if (status === 'Orientation Done') return 'Welcome Kit Done';
+    if (status === 'Didnt Show Up') return 'Did Not Show Up';
+    return status;
+  }
+
+  function formatDate(value) {
+    if (!value) return '';
+    var d = new Date(value);
+    if (isNaN(d.getTime())) return String(value);
+    return d.toLocaleDateString();
+  }
+
+  function toDateInputValue(value) {
+    if (!value) return '';
+    var d = new Date(value);
+    if (isNaN(d.getTime())) return String(value).slice(0, 10);
+    return d.toISOString().slice(0, 10);
+  }
+
+  function getDaysFromHire(member) {
+    var base = new Date(member.hiredDate || member.hired_date || member.createdAt || member.created_at || 0);
+    if (isNaN(base.getTime())) return 0;
+    return Math.floor((Date.now() - base.getTime()) / 86400000);
+  }
+
+  function notify(text, type) {
+    if (typeof showToast === 'function') {
+      showToast(text, type || 'info');
+      return;
+    }
+    var msg = byId('mtcMessage');
+    if (msg) msg.textContent = text || '';
+  }
+
+  function injectStyle() {
+    if (byId('manageTeamClearviewStyle')) return;
+    var style = document.createElement('style');
+    style.id = 'manageTeamClearviewStyle';
+    style.textContent = '' +
+      '.center-column.manage-team-clearview-full{padding:0!important;min-height:calc(100vh - 180px)!important;align-items:stretch!important;justify-content:stretch!important;display:block!important}' +
+      '.center-column.manage-team-clearview-full .admin-workspace{box-shadow:none!important;border:0!important;border-radius:0!important;background:transparent!important;padding:0!important}' +
+      '.center-column.manage-team-clearview-full .admin-workspace-header{display:none!important}' +
+      '.mtc-page{display:grid;grid-template-rows:auto auto auto 1fr;gap:0;font-family:Arial,sans-serif;color:#111;background:#f5f5f5;border:1px solid #b8b8b8;border-radius:0;overflow:hidden;width:100%;min-height:calc(100vh - 190px)}' +
+      '.mtc-titlebar{display:flex;justify-content:space-between;align-items:center;gap:12px;background:#0070b8;color:#fff;padding:10px 12px;min-height:54px}' +
+      '.mtc-titlebar h3{margin:0;color:#fff;font-size:1.55rem;font-weight:400;line-height:1}' +
+      '.mtc-titlebar .mtc-back{border:1px solid rgba(255,255,255,.55);background:rgba(255,255,255,.14);color:#fff;border-radius:2px;padding:7px 12px;cursor:pointer;font:inherit}' +
+      '.mtc-tabs{display:flex;gap:0;border-bottom:1px solid #9f9f9f;background:#e5e5e5;overflow-x:auto;min-height:50px}' +
+      '.mtc-tab{border:0;border-right:1px solid #bcbcbc;background:#e5e5e5;width:190px;min-width:190px;max-width:190px;height:50px;padding:0 10px;font:inherit;cursor:pointer;color:#111;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;box-sizing:border-box}' +
+      '.mtc-tab.active{background:#fff;border-top:3px solid #0070b8;font-weight:700}' +
+      '.mtc-toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px;background:#eeeeee;border-bottom:1px solid #d5d5d5;min-height:54px;box-sizing:border-box}' +
+      '.mtc-toolbar-note{font-size:.86rem;color:#555;font-weight:700}' +
+      '.mtc-btn{border:1px solid #888;background:#f7f7f7;color:#111;min-height:34px;min-width:110px;padding:6px 12px;border-radius:2px;cursor:pointer;font:inherit;box-sizing:border-box}' +
+      '.mtc-btn.primary{background:#0070b8;color:#fff;border-color:#005f9d}' +
+      '.mtc-btn.danger{color:#9b0000}' +
+      '.mtc-btn.small{min-width:82px;min-height:30px;padding:4px 8px;font-size:.86rem}' +
+      '.mtc-content{overflow:auto;padding:10px}' +
+      '.mtc-section{background:#fff;border:1px solid #cfcfcf;margin:0 0 10px}' +
+      '.mtc-section-title{background:#f8f8f8;border-bottom:2px solid #9f9f9f;padding:8px 10px;font-weight:700;color:#444}' +
+      '.mtc-form{display:grid;grid-template-columns:1fr 1fr;gap:12px 24px;padding:14px 18px 16px}' +
+      '.mtc-field{display:grid;grid-template-columns:160px minmax(180px,1fr);gap:8px;align-items:center}' +
+      '.mtc-field label{font-weight:700;text-align:right;font-size:.92rem}' +
+      '.mtc-required{color:red;margin-left:4px}' +
+      '.mtc-input,.mtc-select{width:100%;min-height:30px;border:1px solid #bdbdbd;background:#ffffe5;padding:4px 6px;font:inherit;border-radius:2px;box-sizing:border-box}' +
+      '.mtc-select{background:#fff}' +
+      '.mtc-readonly{background:#f4f4f4;color:#444}' +
+      '.mtc-textarea{width:100%;min-height:78px;border:1px solid #bdbdbd;background:#ffffe5;padding:6px;font:inherit;border-radius:2px;resize:vertical;box-sizing:border-box}' +
+      '.mtc-form-actions{grid-column:1/-1;display:flex;gap:8px;justify-content:flex-end;padding-top:4px}' +
+      '.mtc-filter{display:grid;grid-template-columns:180px 1fr 190px 190px 130px auto;gap:10px;align-items:end;background:#e5e5e5;border:1px solid #d1d1d1;margin:0 0 10px;padding:10px}' +
+      '.mtc-filter label span{display:block;font-size:.78rem;color:#666;font-weight:700;margin-bottom:4px}' +
+      '.mtc-table-wrap{overflow-x:auto;background:#fff;border:1px solid #d9d9d9;margin:0 0 10px}' +
+      '.mtc-table{width:100%;border-collapse:collapse;font-size:.92rem}' +
+      '.mtc-table th{padding:9px 8px;text-align:left;color:#555;background:#fff;border-bottom:2px solid #9f9f9f;text-decoration:underline;font-weight:400}' +
+      '.mtc-table td{padding:8px;border-bottom:1px solid #d9d9d9;color:#111;font-weight:400;vertical-align:top}' +
+      '.mtc-table tbody tr:nth-child(even){background:#eeeeee}' +
+      '.mtc-table tbody tr:nth-child(odd){background:#ffffff}' +
+      '.mtc-name-btn{border:0;background:transparent;color:#0070b8;font:inherit;font-weight:700;cursor:pointer;padding:0;text-align:left}' +
+      '.mtc-name-btn:hover{text-decoration:underline}' +
+      '.mtc-status{display:inline-flex;padding:3px 8px;border-radius:999px;background:#e8f2ff;color:#1f6fb2;font-size:.76rem;white-space:nowrap}' +
+      '.mtc-status.active{background:#e8f7ed;color:#0f7d44}' +
+      '.mtc-status.follow{background:#fff4d7;color:#8a5a00}' +
+      '.mtc-status.former{background:#ffe6e6;color:#a30000}' +
+      '.mtc-detail-row td{background:#f8f8f8;padding:12px}' +
+      '.mtc-detail{display:grid;grid-template-columns:repeat(4,minmax(130px,1fr));gap:10px;border:1px solid #d7d7d7;background:#fff;padding:12px}' +
+      '.mtc-detail div span{display:block;color:#666;font-size:.78rem;font-weight:700;margin-bottom:3px}' +
+      '.mtc-empty{padding:16px;color:#555}' +
+      '.mtc-message{min-height:20px;color:#b51218;font-weight:700;margin:0 0 10px}' +
+      '.mtc-action-row{display:flex;gap:6px;flex-wrap:wrap;align-items:center}' +
+      '.mtc-action-row.detail-actions{grid-column:1/-1;border-top:1px solid #ddd;padding-top:10px;margin-top:4px}' +
+      '.mtc-row-action-cell{width:120px;min-width:120px;white-space:nowrap}' +
+      '.mtc-edit-input,.mtc-edit-select{width:100%;min-height:28px;border:1px solid #bdbdbd;background:#ffffe5;padding:4px 6px;font:inherit;border-radius:2px;box-sizing:border-box}' +
+      '.mtc-row-note{font-size:.84rem;color:#666;margin-top:4px}' +
+      '.mtc-import-help{font-size:.86rem;color:#555;line-height:1.35;margin:0 0 10px}' +
+      '.mtc-hidden-file{position:absolute;left:-9999px;width:1px;height:1px;opacity:0}' +
+      '.mtc-transfer-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px 24px;padding:14px 18px 16px}' +
+      '.mtc-transfer-notes{grid-column:1/-1;display:grid;grid-template-columns:160px minmax(180px,1fr);gap:8px;align-items:start}' +
+      '.mtc-transfer-notes label{font-weight:700;text-align:right;font-size:.92rem}' +
+      '.mtc-timeline{grid-column:1/-1;border-top:1px solid #ddd;padding-top:10px}' +
+      '.mtc-timeline-item{padding:6px 0;border-bottom:1px solid #eee}' +
+      '.mtc-timeline-item small{display:block;color:#666;margin-top:2px}' +
+      '@media(max-width:1000px){.mtc-form,.mtc-filter,.mtc-detail,.mtc-transfer-grid{grid-template-columns:1fr}.mtc-field,.mtc-transfer-notes{grid-template-columns:1fr}.mtc-field label,.mtc-transfer-notes label{text-align:left}.mtc-tab{width:160px;min-width:160px;max-width:160px}}';
+    document.head.appendChild(style);
+  }
+
+  function showWorkspace() {
+    var centerColumn = document.querySelector('.center-column');
+    var newsletter = document.querySelector('.newsletter');
+
+    if (centerColumn && typeof adminWorkspace !== 'undefined' && adminWorkspace) {
+      centerColumn.innerHTML = '';
+      centerColumn.appendChild(adminWorkspace);
+      centerColumn.style.display = 'block';
+      centerColumn.classList.add('manage-team-clearview-full');
+    }
+
+    if (newsletter) newsletter.style.display = 'none';
+
+    if (typeof adminWorkspace !== 'undefined' && adminWorkspace) {
+      adminWorkspace.hidden = false;
+      adminWorkspace.style.display = 'grid';
+    }
+
+    var adminHeader = adminWorkspace ? adminWorkspace.querySelector('.admin-workspace-header') : null;
+    if (adminHeader) adminHeader.style.display = 'none';
+    if (typeof adminWorkspaceEyebrow !== 'undefined' && adminWorkspaceEyebrow) adminWorkspaceEyebrow.textContent = '';
+    if (typeof adminWorkspaceTitle !== 'undefined' && adminWorkspaceTitle) adminWorkspaceTitle.textContent = '';
+    if (typeof adminWorkspaceNote !== 'undefined' && adminWorkspaceNote) adminWorkspaceNote.textContent = '';
+    if (typeof adminSummaryGrid !== 'undefined' && adminSummaryGrid) adminSummaryGrid.innerHTML = '';
+    if (typeof adminSectionTabs !== 'undefined' && adminSectionTabs) adminSectionTabs.innerHTML = '';
+    if (typeof adminSections !== 'undefined' && adminSections) adminSections.innerHTML = getHtml();
+  }
+
+  function tabButton(key, label) {
+    return '<button class="mtc-tab' + (mtState.tab === key ? ' active' : '') + '" type="button" data-mtc-tab="' + attr(key) + '">' + esc(label) + '</button>';
+  }
+
+  function getHtml() {
+    return '' +
+      '<section class="mtc-page" id="manageTeamClearviewPage">' +
+        '<div class="mtc-titlebar"><h3>Manage Team</h3><button class="mtc-back" type="button" id="mtcBackDashboardBtn">Back to Dashboard</button></div>' +
+        '<div class="mtc-tabs" id="mtcTabs">' +
+          tabButton('ADD', 'Add New Employee') +
+          tabButton('HEROES', 'New Heroes Tracking') +
+          tabButton('FOLLOW_UP', 'Follow Up Needed') +
+          tabButton('TRANSFER', 'Transfer Employee') +
+          tabButton('ALL', 'All Employee List') +
+        '</div>' +
+        '<div class="mtc-toolbar" id="mtcToolbar"></div>' +
+        '<div class="mtc-content" id="mtcContent"></div>' +
+      '</section>';
+  }
+
+  function fieldHtml(id, label, type, required, placeholder) {
+    return '<div class="mtc-field"><label for="' + attr(id) + '">' + esc(label) + (required ? '<span class="mtc-required">*</span>' : '') + '</label><input class="mtc-input" id="' + attr(id) + '" type="' + attr(type || 'text') + '"' + (required ? ' required' : '') + (placeholder ? ' placeholder="' + attr(placeholder) + '"' : '') + '></div>';
+  }
+
+  function bindEvents() {
+    var tabs = byId('mtcTabs');
+    if (tabs) {
+      tabs.querySelectorAll('[data-mtc-tab]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          mtState.tab = btn.dataset.mtcTab;
+          mtState.page = 1;
+          mtState.editMemberId = '';
+          mtState.openMemberId = '';
+          renderPage();
+        });
+      });
+    }
+
+    var back = byId('mtcBackDashboardBtn');
+    if (back) {
+      back.addEventListener('click', function() {
+        if (typeof goBackToDashboardHome === 'function') {
+          goBackToDashboardHome();
+          return;
+        }
+        if (typeof restoreDashboardHomeLayout_ === 'function') restoreDashboardHomeLayout_();
+      });
+    }
+  }
+
+  function redrawTabs() {
+    var tabs = byId('mtcTabs');
+    if (!tabs) return;
+    tabs.innerHTML = '' +
+      tabButton('ADD', 'Add New Employee') +
+      tabButton('HEROES', 'New Heroes Tracking') +
+      tabButton('FOLLOW_UP', 'Follow Up Needed') +
+      tabButton('TRANSFER', 'Transfer Employee') +
+      tabButton('ALL', 'All Employee List');
+    bindEvents();
+  }
+
+  function renderToolbar() {
+    var toolbar = byId('mtcToolbar');
+    if (!toolbar) return;
+
+    var title = {
+      ADD: 'Add new employee or import employee data',
+      HEROES: 'Track newly hired employees and update onboarding status',
+      FOLLOW_UP: 'Shows newly hired employees older than 10 days who still need action',
+      TRANSFER: 'Transfer an employee from one restaurant to another',
+      ALL: 'View all employees with status filters'
+    }[mtState.tab] || '';
+
+    toolbar.innerHTML = '' +
+      '<span class="mtc-toolbar-note">' + esc(title) + '</span>' +
+      '<span style="flex:1"></span>' +
+      (mtState.tab === 'ADD' ? '<button class="mtc-btn" id="mtcExportTemplateBtn" type="button">Export Template</button><button class="mtc-btn" id="mtcExportBtn" type="button">Export Employee List</button>' : '') +
+      (mtState.tab === 'ALL' || mtState.tab === 'HEROES' || mtState.tab === 'FOLLOW_UP' ? '<button class="mtc-btn" id="mtcExportBtn" type="button">Export</button>' : '') +
+      '<button class="mtc-btn" id="mtcRefreshBtn" type="button">Refresh</button>';
+
+    var refresh = byId('mtcRefreshBtn');
+    if (refresh) refresh.addEventListener('click', loadData);
+
+    var exportBtn = byId('mtcExportBtn');
+    if (exportBtn) exportBtn.addEventListener('click', exportCsv);
+
+    var exportTemplateBtn = byId('mtcExportTemplateBtn');
+    if (exportTemplateBtn) exportTemplateBtn.addEventListener('click', exportImportTemplate);
+  }
+
+  function loadData() {
+    var content = byId('mtcContent');
+    if (content) content.innerHTML = '<div class="mtc-section"><div class="mtc-empty">Loading...</div></div>';
+
+    var rowEl = null;
+    try { rowEl = nameField ? (nameField.closest('tr') || nameField.closest('.mtc-detail') || nameField.closest('.mtc-section')) : null; } catch (e) {}
+    if (typeof setPortalRowSavingV414 === 'function') setPortalRowSavingV414(rowEl, true, 'Saving...');
+
+    google.script.run
+      .withSuccessHandler(function(response) {
+        if (typeof setPortalRowSavingV414 === 'function') setPortalRowSavingV414(rowEl, false);
+        if (!response || !response.success) {
+          if (content) content.innerHTML = '<div class="mtc-section"><div class="mtc-empty">' + esc((response && response.error) || 'Could not load team data.') + '</div></div>';
+          return;
+        }
+
+        var data = response.data || {};
+        mtState.restaurants = data.restaurants || [];
+        mtState.members = data.teamMembers || data.employees || [];
+        mtState.transferHistory = data.transferHistory || [];
+        renderPage();
+      })
+      .withFailureHandler(function(error) {
+        if (content) content.innerHTML = '<div class="mtc-section"><div class="mtc-empty">' + esc(error && error.message ? error.message : 'Could not load team data.') + '</div></div>';
+      })
+      .getManageTeamData(token_());
+  }
+
+  function renderPage() {
+    redrawTabs();
+    renderToolbar();
+
+    if (mtState.tab === 'ADD') renderAddEmployee();
+    if (mtState.tab === 'HEROES') { mtState.filters.status = mtState.filters.status || 'ALL'; renderEmployeeList('HEROES'); }
+    if (mtState.tab === 'FOLLOW_UP') renderEmployeeList('FOLLOW_UP');
+    if (mtState.tab === 'TRANSFER') renderTransfer();
+    if (mtState.tab === 'ALL') renderEmployeeList('ALL');
+  }
+
+  function restaurantOptions(selected, includeAll) {
+    var html = includeAll ? '<option value="ALL">All Restaurants</option>' : '<option value="">Not Selected</option>';
+    html += (mtState.restaurants || []).map(function(r) {
+      var value = String(r.restaurantId || r.restaurant_id || '').trim();
+      var number = String(r.restaurantNumber || r.restaurant_number || r.restaurantCode || r.restaurant_code || r.number || '').trim();
+      var name = String(r.restaurantName || r.restaurant_name || r.name || '').trim();
+      if (!value && number) value = 'REST_' + number;
+      var label = (number ? number + ' ' : '') + name;
+      label = label.trim() || value;
+      return '<option value="' + attr(value) + '"' + (String(selected || '') === value ? ' selected' : '') + '>' + esc(label) + '</option>';
+    }).join('');
+    return html;
+  }
+
+  function renderAddEmployee() {
+    var content = byId('mtcContent');
+    if (!content) return;
+    content.innerHTML = '' +
+      '<div class="mtc-section">' +
+        '<div class="mtc-section-title">Add New Employee</div>' +
+        '<form class="mtc-form" id="mtcForm">' +
+          fieldHtml('mtcName', 'Name', 'text', true, 'Employee name') +
+          fieldHtml('mtcMobile', 'Mobile Number', 'tel', true, 'Mobile number') +
+          fieldHtml('mtcHiredDate', 'Hired Date', 'date', true, '') +
+          '<div class="mtc-field"><label>Newly Hired</label><label style="text-align:left;font-weight:400"><input id="mtcNewlyHired" type="checkbox" checked> Yes</label></div>' +
+          '<div class="mtc-field"><label>Assigned Restaurant<span class="mtc-required">*</span></label><select class="mtc-select" id="mtcRestaurantSelect">' + restaurantOptions('', false) + '</select></div>' +
+          '<div class="mtc-field"><label>Status</label><input class="mtc-input mtc-readonly" id="mtcStatusPreview" value="Ready to Start" disabled></div>' +
+          '<div class="mtc-form-actions">' +
+            '<button class="mtc-btn primary" id="mtcSaveBtn" type="submit">Save Employee</button>' +
+            '<button class="mtc-btn" id="mtcClearBtn" type="button">Clear</button>' +
+          '</div>' +
+        '</form>' +
+        '<p class="mtc-message" id="mtcMessage"></p>' +
+      '</div>' +
+      '<div class="mtc-section">' +
+        '<div class="mtc-section-title">Import Data</div>' +
+        '<div style="padding:14px 18px">' +
+          '<p class="mtc-import-help">Import from an external CSV file. Use the template first, then upload the completed file.</p>' +
+          '<p class="mtc-import-help">Required columns: Name, Mobile Number, Hired Date, Restaurant Number, Newly Hired</p>' +
+          '<input class="mtc-hidden-file" id="mtcImportFile" type="file" accept=".csv,text/csv">' +
+          '<div class="mtc-form-actions" style="justify-content:flex-start;margin-top:10px">' +
+            '<button class="mtc-btn primary" id="mtcImportChooseBtn" type="button">Import Data</button>' +
+            '<button class="mtc-btn" id="mtcExportTemplateInlineBtn" type="button">Export Template</button>' +
+            '<button class="mtc-btn" id="mtcExportListInlineBtn" type="button">Export Employee List</button>' +
+            '<button class="mtc-btn" id="mtcImportClearBtn" type="button">Clear Import</button>' +
+          '</div>' +
+          '<p class="mtc-message" id="mtcImportMessage"></p>' +
+        '</div>' +
+      '</div>';
+
+    var form = byId('mtcForm');
+    if (form) form.addEventListener('submit', function(event) { event.preventDefault(); saveEmployee(); });
+
+    var clear = byId('mtcClearBtn');
+    if (clear) clear.addEventListener('click', clearForm);
+
+    var newly = byId('mtcNewlyHired');
+    if (newly) newly.addEventListener('change', function() {
+      var preview = byId('mtcStatusPreview');
+      if (preview) preview.value = newly.checked ? 'Ready to Start' : 'ACTIVE';
+    });
+
+    var importChoose = byId('mtcImportChooseBtn');
+    if (importChoose) importChoose.addEventListener('click', function() {
+      var fileInput = byId('mtcImportFile');
+      if (fileInput) fileInput.click();
+    });
+
+    var importFile = byId('mtcImportFile');
+    if (importFile) importFile.addEventListener('change', handleImportFile);
+
+    var exportTemplateInline = byId('mtcExportTemplateInlineBtn');
+    if (exportTemplateInline) exportTemplateInline.addEventListener('click', exportImportTemplate);
+
+    var exportListInline = byId('mtcExportListInlineBtn');
+    if (exportListInline) exportListInline.addEventListener('click', exportCsv);
+
+    var importClear = byId('mtcImportClearBtn');
+    if (importClear) importClear.addEventListener('click', function() {
+      var fileInput = byId('mtcImportFile');
+      if (fileInput) fileInput.value = '';
+      var msg = byId('mtcImportMessage');
+      if (msg) msg.textContent = '';
+    });
+  }
+
+  function clearForm() {
+    var form = byId('mtcForm');
+    if (form) form.reset();
+    var newly = byId('mtcNewlyHired');
+    if (newly) newly.checked = true;
+    var preview = byId('mtcStatusPreview');
+    if (preview) preview.value = 'Ready to Start';
+    var msg = byId('mtcMessage');
+    if (msg) msg.textContent = '';
+  }
+
+  function saveEmployee() {
+    var msg = byId('mtcMessage');
+    var name = String((byId('mtcName') || {}).value || '').trim();
+    var mobile = String((byId('mtcMobile') || {}).value || '').trim();
+    var hiredDate = String((byId('mtcHiredDate') || {}).value || '').trim();
+    var restaurant = String((byId('mtcRestaurantSelect') || {}).value || '').trim();
+    var newly = !!((byId('mtcNewlyHired') || {}).checked);
+
+    if (!name || !mobile || !hiredDate || !restaurant) {
+      if (msg) msg.textContent = 'Please fill all required fields.';
+      return;
+    }
+
+    if (!/^[0-9+()\-\s]{7,20}$/.test(mobile)) {
+      if (msg) msg.textContent = 'Please enter a valid mobile number.';
+      return;
+    }
+
+    if (msg) msg.textContent = 'Saving...';
+
+    google.script.run
+      .withSuccessHandler(function(response) {
+        if (!response || !response.success) {
+          if (msg) msg.textContent = (response && response.error) || 'Employee could not be saved.';
+          return;
+        }
+        var savedId = String((response.data && response.data.teamMemberId) || ('LOCAL_' + Date.now()));
+        var rest = (mtState.restaurants || []).filter(function(r) { return String(r.restaurantId || r.restaurant_id || '') === restaurant; })[0] || {};
+        var restaurantNumber = String(rest.restaurantNumber || rest.restaurant_number || rest.restaurantCode || rest.restaurant_code || rest.number || restaurant || '');
+        mtState.members = mtState.members || [];
+        mtState.members.unshift({
+          teamMemberId: savedId,
+          team_member_id: savedId,
+          fullName: name,
+          full_name: name,
+          name: name,
+          mobile: mobile,
+          mobile_number: mobile,
+          phone: mobile,
+          hiredDate: hiredDate,
+          hire_date: hiredDate,
+          restaurantId: restaurant,
+          restaurant_id: restaurant,
+          restaurantNumber: restaurantNumber,
+          restaurant_number: restaurantNumber,
+          status: newly ? 'Ready to Start' : 'ACTIVE',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        });
+        clearForm();
+        if (msg) msg.textContent = newly ? 'Saved. Check New Heroes Tracking.' : 'Saved. Check All Employee List.';
+        mtState.tab = newly ? 'HEROES' : 'ALL';
+        mtState.editMemberId = '';
+        mtState.openMemberId = savedId;
+        renderPage();
+      })
+      .withFailureHandler(function(error) {
+        if (msg) msg.textContent = error && error.message ? error.message : 'Employee could not be saved.';
+      })
+      .saveTeamMemberFromManageTeam({
+        sessionToken: token_(),
+        newlyHired: newly,
+        status: newly ? 'Ready to Start' : 'ACTIVE',
+        name: name,
+        mobile: mobile,
+        hiredDate: hiredDate,
+        assignedRestaurants: [restaurant]
+      });
+  }
+
+  function findRestaurantIdByCode(code) {
+    code = String(code || '').trim();
+    var row = (mtState.restaurants || []).find(function(r) {
+      return String(r.restaurantNumber || r.restaurant_number || r.restaurantCode || r.restaurant_code || r.restaurantId || r.restaurant_id || '').trim() === code;
+    });
+    return row ? (row.restaurantId || row.restaurant_id || '') : '';
+  }
+
+  function parseCsvLine(line) {
+    var result = [];
+    var current = '';
+    var inQuotes = false;
+    for (var i = 0; i < line.length; i += 1) {
+      var ch = line[i];
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          current += '"';
+          i += 1;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (ch === ',' && !inQuotes) {
+        result.push(current.trim());
+        current = '';
+      } else {
+        current += ch;
+      }
+    }
+    result.push(current.trim());
+    return result;
+  }
+
+  function downloadCsvFile(filename, rows) {
+    var csv = rows.map(function(row) {
+      return row.map(function(cell) {
+        return '"' + String(cell == null ? '' : cell).replace(/"/g, '""') + '"';
+      }).join(',');
+    }).join('\n');
+
+    var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function exportImportTemplate() {
+    downloadCsvFile('manage-team-import-template.csv', [
+      ['Name', 'Mobile Number', 'Hired Date', 'Restaurant Number', 'Newly Hired'],
+      ['John Smith', '4161234567', '2026-05-04', '548', 'Yes']
+    ]);
+  }
+
+  function handleImportFile() {
+    var input = byId('mtcImportFile');
+    var msg = byId('mtcImportMessage');
+    var file = input && input.files && input.files[0];
+    if (!file) return;
+
+    if (msg) msg.textContent = 'Reading file...';
+
+    var reader = new FileReader();
+    reader.onload = function(event) {
+      importEmployeesFromText(String((event.target && event.target.result) || ''));
+    };
+    reader.onerror = function() {
+      if (msg) msg.textContent = 'Could not read the selected file.';
+    };
+    reader.readAsText(file);
+  }
+
+  function importEmployeesFromText(raw) {
+    var msg = byId('mtcImportMessage');
+    raw = String(raw || '').trim();
+    if (!raw) {
+      if (msg) msg.textContent = 'Selected file is empty.';
+      return;
+    }
+
+    var lines = raw.split(/\r?\n/).map(function(line) { return line.trim(); }).filter(Boolean);
+    if (!lines.length) {
+      if (msg) msg.textContent = 'No employee data found in the file.';
+      return;
+    }
+
+    var first = parseCsvLine(lines[0]).map(function(cell) { return String(cell || '').toLowerCase().trim(); });
+    var hasHeader = first.indexOf('name') !== -1 || first.indexOf('mobile number') !== -1 || first.indexOf('restaurant number') !== -1;
+    var dataLines = hasHeader ? lines.slice(1) : lines;
+    var parsed = [];
+    var errors = [];
+
+    dataLines.forEach(function(line, index) {
+      var parts = parseCsvLine(line);
+      var lineNumber = (hasHeader ? index + 2 : index + 1);
+      if (parts.length < 4) {
+        errors.push('Line ' + lineNumber + ' is missing required data.');
+        return;
+      }
+      var name = parts[0];
+      var mobile = parts[1];
+      var hiredDate = parts[2];
+      var restaurantId = findRestaurantIdByCode(parts[3]);
+      var newly = String(parts[4] || 'Yes').toLowerCase() !== 'no';
+      if (!name) errors.push('Line ' + lineNumber + ' is missing name.');
+      if (!mobile) errors.push('Line ' + lineNumber + ' is missing mobile number.');
+      if (!hiredDate || isNaN(new Date(hiredDate).getTime())) errors.push('Line ' + lineNumber + ' has invalid hired date.');
+      if (!restaurantId) errors.push('Line ' + lineNumber + ' has invalid restaurant number.');
+      if (!name || !mobile || !hiredDate || isNaN(new Date(hiredDate).getTime()) || !restaurantId) return;
+      parsed.push({ name: name, mobile: mobile, hiredDate: hiredDate, assignedRestaurants: [restaurantId], newlyHired: newly, status: newly ? 'Ready to Start' : 'ACTIVE' });
+    });
+
+    if (errors.length) {
+      if (msg) msg.textContent = errors.slice(0, 5).join(' ');
+      return;
+    }
+
+    if (!parsed.length) {
+      if (msg) msg.textContent = 'No employees found to import.';
+      return;
+    }
+
+    if (msg) msg.textContent = 'Importing ' + parsed.length + ' employees...';
+    importOne(parsed, 0, 0);
+  }
+
+  function importEmployees() {
+    var msg = byId('mtcImportMessage');
+    if (msg) msg.textContent = 'Please choose a CSV file using Import Data.';
+  }
+
+  function importOne(rows, index, saved) {
+    if (index >= rows.length) {
+      var msg = byId('mtcImportMessage');
+      if (msg) msg.textContent = saved + ' employees imported successfully.';
+      notify(saved + ' employees imported successfully.', 'success');
+      var fileInput = byId('mtcImportFile');
+      if (fileInput) fileInput.value = '';
+      mtState.tab = 'ALL';
+      loadData();
+      return;
+    }
+
+    var payload = rows[index];
+    payload.sessionToken = token_();
+
+    google.script.run
+      .withSuccessHandler(function(response) {
+        importOne(rows, index + 1, response && response.success ? saved + 1 : saved);
+      })
+      .withFailureHandler(function() {
+        importOne(rows, index + 1, saved);
+      })
+      .saveTeamMemberFromManageTeam(payload);
+  }
+
+  function renderFilter(showStatus) {
+    var statusOptions = ALL_STATUS_OPTIONS.map(function(status) {
+      var label = status === 'ALL' ? 'All Status' : status;
+      return '<option value="' + attr(status) + '"' + (mtState.filters.status === status ? ' selected' : '') + '>' + esc(label) + '</option>';
+    }).join('');
+
+    return '' +
+      '<div class="mtc-filter">' +
+        '<label><span>Search</span><input class="mtc-input" id="mtcSearch" value="' + attr(mtState.filters.search || '') + '" placeholder="Name or mobile"></label>' +
+        '<label><span>Restaurant</span><select class="mtc-select" id="mtcFilterRestaurant">' + restaurantOptions(mtState.filters.restaurant, true) + '</select></label>' +
+        (showStatus ? '<label><span>Status</span><select class="mtc-select" id="mtcFilterStatus">' + statusOptions + '</select></label>' : '<span></span>') +
+        '<label><span>Show</span><select class="mtc-select" id="mtcLimit"><option value="10">10 per page</option><option value="25">25 per page</option><option value="50">50 per page</option></select></label>' +
+        '<button class="mtc-btn primary" id="mtcApplyFilters" type="button">Apply</button>' +
+      '</div>';
+  }
+
+  function bindFilters() {
+    var limit = byId('mtcLimit');
+    if (limit) limit.value = String(mtState.viewLimit || 50);
+    var apply = byId('mtcApplyFilters');
+    if (apply) apply.addEventListener('click', applyFilters);
+    ['mtcSearch', 'mtcFilterRestaurant', 'mtcFilterStatus', 'mtcLimit'].forEach(function(id) {
+      var el = byId(id);
+      if (el) el.addEventListener('change', applyFilters);
+    });
+    var search = byId('mtcSearch');
+    if (search) {
+      search.addEventListener('input', function() {
+        mtState.filters.search = search.value || '';
+      });
+      search.addEventListener('keydown', function(event) {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          applyFilters();
+        }
+      });
+    }
+  }
+
+  function applyFilters() {
+    mtState.filters.search = (byId('mtcSearch') || {}).value || '';
+    mtState.filters.restaurant = (byId('mtcFilterRestaurant') || {}).value || 'ALL';
+    mtState.filters.status = (byId('mtcFilterStatus') || {}).value || 'ALL';
+    mtState.viewLimit = Math.max(10, Number((byId('mtcLimit') || {}).value || 10));
+    mtState.page = 1;
+    renderTable();
+  }
+
+  function renderEmployeeList(mode) {
+    var content = byId('mtcContent');
+    if (!content) return;
+
+    var title = mode === 'HEROES' ? 'New Heroes Tracking' : mode === 'FOLLOW_UP' ? 'Follow Up Needed' : 'All Employee List';
+    var help = mode === 'HEROES'
+      ? 'This section shows newly hired employees and their onboarding status.'
+      : mode === 'FOLLOW_UP'
+        ? 'This section shows new hires older than 10 days who still need onboarding action.'
+        : 'This section shows all employees. Use filters to view any status.';
+
+    content.innerHTML = '' +
+      '<div class="mtc-section"><div class="mtc-section-title">' + esc(title) + '</div><div style="padding:10px 12px;color:#555">' + esc(help) + '</div></div>' +
+      renderFilter(mode === 'ALL' || mode === 'HEROES') +
+      '<div class="mtc-table-wrap"><table class="mtc-table"><thead><tr>' +
+        tableHeadersForMode(mode) +
+      '</tr></thead><tbody id="mtcTableBody"></tbody></table></div>' +
+      '<div class="mtc-pager" id="mtcPager"></div>';
+
+    bindFilters();
+    renderTable();
+  }
+
+  function tableHeadersForMode(mode) {
+    if (mode === 'FOLLOW_UP') {
+      return '<th>Name</th><th>Mobile</th><th>Status</th><th>Restaurant Number</th><th>Hired Date</th><th>Follow Up Note</th>';
+    }
+    return '<th>Name</th><th>Mobile</th><th>Status</th><th>Restaurant Number</th><th>Hired Date</th><th>Action</th>';
+  }
+
+  function employeeRestaurantCodeOnly(m) {
+    if (m.restaurantCode) return String(m.restaurantCode);
+    if (m.restaurantNumber) return String(m.restaurantNumber);
+    if (m.assignedRestaurantNumber) return String(m.assignedRestaurantNumber);
+    var ids = employeeRestaurantIds(m);
+    if (ids.length) {
+      var r = (mtState.restaurants || []).find(function(item) { return String(item.restaurantId || '') === String(ids[0]); });
+      if (r) return String(r.restaurantCode || r.restaurantNumber || r.restaurantId || '');
+      return String(ids[0]);
+    }
+    return '';
+  }
+
+  function followUpMessageForMember(m) {
+    var days = getDaysFromHire(m);
+    var status = normalizeStatus(m.status || '');
+    var hiredDate = formatDate(m.hiredDate || m.hired_date);
+    var restaurant = employeeRestaurantCodeOnly(m) || '-';
+    return 'Hired since ' + (hiredDate || '-') + ', ' + days + ' days ago, but status is still ' + (status || '-') + '. Please follow up with restaurant ' + restaurant + '.';
+  }
+
+  function employeeRestaurantIds(m) {
+    if (Array.isArray(m.restaurantIds)) return m.restaurantIds.map(String);
+    if (m.restaurantId) return [String(m.restaurantId)];
+    if (m.assignedRestaurant) return [String(m.assignedRestaurant)];
+    return [];
+  }
+
+  function getFilteredMembers() {
+    var rows = (mtState.members || []).slice();
+    var tab = mtState.tab;
+
+    rows = rows.filter(function(m) {
+      var status = normalizeStatus(m.status || m.current_status || m.currentStatus || '');
+      if (tab === 'HEROES') return TRACKING_STATUSES.indexOf(status) !== -1;
+      if (tab === 'FOLLOW_UP') return needsFollowUp(m);
+      if (tab === 'ALL') return true;
+      return true;
+    });
+
+    if (mtState.filters.restaurant !== 'ALL') {
+      rows = rows.filter(function(m) {
+        return employeeRestaurantIds(m).indexOf(String(mtState.filters.restaurant)) !== -1;
+      });
+    }
+
+    if (mtState.filters.status !== 'ALL' && (tab === 'ALL' || tab === 'HEROES')) {
+      rows = rows.filter(function(m) {
+        return normalizeStatus(m.status || '') === normalizeStatus(mtState.filters.status);
+      });
+    }
+
+    var q = String(mtState.filters.search || '').toLowerCase().trim();
+    if (q) {
+      rows = rows.filter(function(m) {
+        return String((m.name || '') + ' ' + (m.mobile || '') + ' ' + (m.restaurantName || '') + ' ' + (m.status || '')).toLowerCase().indexOf(q) !== -1;
+      });
+    }
+
+    rows.sort(function(a, b) {
+      return new Date(b.updatedAt || b.updated_at || b.createdAt || b.created_at || b.hiredDate || 0) - new Date(a.updatedAt || a.updated_at || a.createdAt || a.created_at || a.hiredDate || 0);
+    });
+
+    return rows;
+  }
+
+  function getPagedMembers(rows) {
+    var pageSize = Math.max(10, Number(mtState.viewLimit || 10));
+    var totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+    mtState.page = Math.min(Math.max(1, Number(mtState.page || 1)), totalPages);
+    var start = (mtState.page - 1) * pageSize;
+    return {
+      rows: rows.slice(start, start + pageSize),
+      totalRows: rows.length,
+      totalPages: totalPages,
+      pageSize: pageSize
+    };
+  }
+
+  function renderPager(pageInfo) {
+    var pager = byId('mtcPager');
+    if (!pager) return;
+
+    if (!pageInfo || pageInfo.totalRows <= pageInfo.pageSize) {
+      pager.innerHTML = '';
+      return;
+    }
+
+    pager.innerHTML = '' +
+      '<div class="mtc-pager-inner">' +
+        '<button class="mtc-btn small" id="mtcPrevPage" type="button"' + (mtState.page <= 1 ? ' disabled' : '') + '>Prev</button>' +
+        '<span class="mtc-pager-text">Page ' + mtState.page + ' of ' + pageInfo.totalPages + ' · ' + pageInfo.totalRows + ' records</span>' +
+        '<button class="mtc-btn small" id="mtcNextPage" type="button"' + (mtState.page >= pageInfo.totalPages ? ' disabled' : '') + '>Next</button>' +
+      '</div>';
+
+    var prev = byId('mtcPrevPage');
+    if (prev) prev.addEventListener('click', function() {
+      if (mtState.page > 1) {
+        mtState.page -= 1;
+        renderTable();
+      }
+    });
+
+    var next = byId('mtcNextPage');
+    if (next) next.addEventListener('click', function() {
+      if (mtState.page < pageInfo.totalPages) {
+        mtState.page += 1;
+        renderTable();
+      }
+    });
+  }
+
+  function needsFollowUp(m) {
+    var status = normalizeStatus(m.status || '');
+    var days = getDaysFromHire(m);
+    if (days < 10) return false;
+    return status === 'Ready to Start' || status === 'Welcome Kit Done';
+  }
+
+  function getMemberById(teamMemberId) {
+    return (mtState.members || []).find(function(member) {
+      return String(member.teamMemberId || member.team_member_id || member.id || '') === String(teamMemberId || '');
+    }) || null;
+  }
+
+  function getMemberId(m) {
+    return String(m.teamMemberId || m.team_member_id || m.id || '');
+  }
+
+  function statusClass(status, member) {
+    status = normalizeStatus(status);
+    if (status === 'ACTIVE') return ' active';
+    if (needsFollowUp(member || {})) return ' follow';
+    if (status === 'Quit' || status === 'Did Not Show Up' || status === 'INACTIVE') return ' former';
+    return '';
+  }
+
+  function renderTable() {
+    var body = byId('mtcTableBody');
+    if (!body) return;
+
+    var allRows = getFilteredMembers();
+    var pageInfo = getPagedMembers(allRows);
+    var rows = pageInfo.rows;
+
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="6"><div class="mtc-empty">No records found.</div></td></tr>';
+      renderPager(pageInfo);
+      return;
+    }
+
+    body.innerHTML = rows.map(function(m) {
+      var id = getMemberId(m);
+      var status = normalizeStatus(m.status || 'Ready to Start');
+      var open = mtState.openMemberId === id;
+      var editing = mtState.editMemberId === id;
+
+      if (editing) return editRow(m) + (open ? detailRow(m) : '');
+
+      var lastCell = mtState.tab === 'FOLLOW_UP' ? esc(followUpMessageForMember(m)) : rowActions(m);
+
+      return '' +
+        '<tr>' +
+          '<td>' + esc(m.name || '-') + '</td>' +
+          '<td>' + esc(m.mobile || '-') + '</td>' +
+          '<td><span class="mtc-status' + statusClass(status, m) + '">' + esc(status === 'ACTIVE' ? 'Active' : status) + '</span></td>' +
+          '<td>' + esc(employeeRestaurantCodeOnly(m) || '-') + '</td>' +
+          '<td>' + esc(formatDate(m.hiredDate || m.hired_date)) + '</td>' +
+          '<td class="mtc-row-action-cell">' + lastCell + '</td>' +
+        '</tr>' +
+        (open ? detailRow(m) : '');
+    }).join('');
+
+    renderPager(pageInfo);
+    bindTableActions(body);
+  }
+
+  function rowActions(m) {
+    var id = getMemberId(m);
+    if (mtState.tab === 'FOLLOW_UP') {
+      return esc(followUpMessageForMember(m));
+    }
+    return '<div class="mtc-action-row"><button class="mtc-btn small" type="button" data-mtc-open="' + attr(id) + '">View</button></div>';
+  }
+
+  function newHeroStatusOptions(current) {
+    current = normalizeStatus(current || 'Ready to Start');
+    return NEW_HERO_STATUS_OPTIONS.map(function(status) {
+      return '<option value="' + attr(status) + '"' + (normalizeStatus(status) === current ? ' selected' : '') + '>' + esc(status) + '</option>';
+    }).join('');
+  }
+
+  function editRow(m) {
+    var id = getMemberId(m);
+    var status = normalizeStatus(m.status || '');
+    return '' +
+      '<tr>' +
+        '<td><input class="mtc-edit-input" data-mtc-edit-name="' + attr(id) + '" value="' + attr(m.name || '') + '"></td>' +
+        '<td><input class="mtc-edit-input" data-mtc-edit-mobile="' + attr(id) + '" value="' + attr(m.mobile || '') + '"></td>' +
+        '<td>' + (mtState.tab === 'HEROES' ? '<select class="mtc-edit-select" data-mtc-edit-status="' + attr(id) + '">' + newHeroStatusOptions(status) + '</select>' : '<span class="mtc-status' + statusClass(status, m) + '">' + esc(status === 'ACTIVE' ? 'Active' : status) + '</span>') + '</td>' +
+        '<td><select class="mtc-edit-select" data-mtc-edit-restaurant="' + attr(id) + '">' + restaurantEditOptions(m) + '</select></td>' +
+        '<td><input class="mtc-edit-input" type="date" data-mtc-edit-hired="' + attr(id) + '" value="' + attr(toDateInputValue(m.hiredDate || m.hired_date)) + '"></td>' +
+        '<td><div class="mtc-action-row"><button class="mtc-btn small primary" type="button" data-mtc-save-details="' + attr(id) + '">Save</button><button class="mtc-btn small" type="button" data-mtc-cancel-edit="' + attr(id) + '">Cancel</button><button class="mtc-btn small danger" type="button" data-mtc-deactivate="' + attr(id) + '">Deactivate</button></div></td>' +
+      '</tr>';
+  }
+
+  function restaurantEditOptions(member) {
+    var currentIds = employeeRestaurantIds(member);
+    return '<option value="">Not Selected</option>' + (mtState.restaurants || []).map(function(r) {
+      var selected = currentIds.indexOf(String(r.restaurantId)) !== -1 ? ' selected' : '';
+      return '<option value="' + attr(r.restaurantId) + '"' + selected + '>' + esc(r.restaurantCode || r.restaurantNumber || r.restaurantName || r.restaurantId) + '</option>';
+    }).join('');
+  }
+
+  function getTransferHistoryForMember(teamMemberId) {
+    return (mtState.transferHistory || []).filter(function(row) {
+      return String(row.teamMemberId || row.team_member_id || '') === String(teamMemberId || '');
+    }).sort(function(a, b) {
+      return new Date(b.createdAt || b.transferDate || 0) - new Date(a.createdAt || a.transferDate || 0);
+    });
+  }
+
+  function detailRow(m) {
+    var id = getMemberId(m);
+    var history = getTransferHistoryForMember(id);
+    var timeline = history.length ? '<div class="mtc-timeline"><strong>Transfer History</strong>' + history.map(function(item) {
+      return '<div class="mtc-timeline-item">' + esc((item.fromRestaurantName || item.fromRestaurant || '-') + ' to ' + (item.toRestaurantName || item.toRestaurant || '-')) + '<small>' + esc(formatDate(item.transferDate || item.createdAt)) + (item.notes ? ' | ' + item.notes : '') + '</small></div>';
+    }).join('') + '</div>' : '<div class="mtc-timeline"><strong>Transfer History</strong><div class="mtc-row-note">No transfer history found.</div></div>';
+
+    var detailsActions = '' +
+      '<div class="mtc-action-row detail-actions">' +
+        '<button class="mtc-btn small" type="button" data-mtc-edit="' + attr(id) + '">Edit Employee</button>' +
+        '<button class="mtc-btn small" type="button" data-mtc-transfer-fast="' + attr(id) + '">Transfer</button>' +
+        '<button class="mtc-btn small danger" type="button" data-mtc-deactivate="' + attr(id) + '">Deactivate</button>' +
+      '</div>';
+
+    return '' +
+      '<tr class="mtc-detail-row"><td colspan="6"><div class="mtc-detail">' +
+        '<div><span>Name</span>' + esc(m.name || '-') + '</div>' +
+        '<div><span>Mobile</span>' + esc(m.mobile || '-') + '</div>' +
+        '<div><span>Status</span>' + esc(normalizeStatus(m.status || '-')) + '</div>' +
+        '<div><span>Current Restaurant</span>' + esc(employeeRestaurantCodeOnly(m) || '-') + '</div>' +
+        '<div><span>Hired Date</span>' + esc(formatDate(m.hiredDate || m.hired_date)) + '</div>' +
+        '<div><span>Days Since Hire</span>' + esc(getDaysFromHire(m)) + '</div>' +
+        '<div><span>Last Updated</span>' + esc(formatDate(m.updatedAt || m.updated_at || m.createdAt)) + '</div>' +
+        '<div><span>Employee ID</span>' + esc(id || '-') + '</div>' +
+        timeline + detailsActions +
+      '</div></td></tr>';
+  }
+
+  function bindTableActions(body) {
+    body.querySelectorAll('[data-mtc-open]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        mtState.openMemberId = mtState.openMemberId === btn.dataset.mtcOpen ? '' : btn.dataset.mtcOpen;
+        renderTable();
+      });
+    });
+
+    body.querySelectorAll('[data-mtc-edit]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        mtState.editMemberId = btn.dataset.mtcEdit;
+        renderTable();
+      });
+    });
+
+    body.querySelectorAll('[data-mtc-cancel-edit]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        mtState.editMemberId = '';
+        renderTable();
+      });
+    });
+
+    body.querySelectorAll('[data-mtc-save-details]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        if (btn.disabled) return;
+        btn.disabled = true;
+        var orig = btn.textContent;
+        btn.textContent = 'Saving…';
+        saveMemberDetails(btn.dataset.mtcSaveDetails, btn, orig);
+      });
+    });
+
+    body.querySelectorAll('[data-mtc-deactivate]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        deactivateMember(btn.dataset.mtcDeactivate);
+      });
+    });
+
+    body.querySelectorAll('[data-mtc-transfer-fast]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        openTransferForMember(btn.dataset.mtcTransferFast);
+      });
+    });
+
+    body.querySelectorAll('[data-mtc-update-status]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var select = document.querySelector('[data-mtc-status-select="' + btn.dataset.mtcUpdateStatus + '"]');
+        updateStatus(btn.dataset.mtcUpdateStatus, select ? select.value : '');
+      });
+    });
+  }
+
+  function saveMemberDetails(teamMemberId, _saveBtn, _saveBtnOrig) {
+    var nameField = document.querySelector('[data-mtc-edit-name="' + teamMemberId + '"]');
+    var mobileField = document.querySelector('[data-mtc-edit-mobile="' + teamMemberId + '"]');
+    var restaurantField = document.querySelector('[data-mtc-edit-restaurant="' + teamMemberId + '"]');
+    var hiredField = document.querySelector('[data-mtc-edit-hired="' + teamMemberId + '"]');
+    var statusField = document.querySelector('[data-mtc-edit-status="' + teamMemberId + '"]');
+
+    var name = String(nameField ? nameField.value : '').trim();
+    var mobile = String(mobileField ? mobileField.value : '').trim();
+    var restaurantId = String(restaurantField ? restaurantField.value : '').trim();
+    var hiredDate = String(hiredField ? hiredField.value : '').trim();
+    var statusValue = String(statusField ? statusField.value : '').trim();
+
+    if (!name || !mobile || !restaurantId || !hiredDate) {
+      notify('Please fill all required fields before saving.', 'error');
+      return;
+    }
+
+    google.script.run
+      .withSuccessHandler(function(response) {
+        if (_saveBtn) { _saveBtn.disabled = false; _saveBtn.textContent = _saveBtnOrig || 'Save'; }
+        if (!response || !response.success) {
+          notify((response && response.error) || 'Employee could not be updated.', 'error');
+          return;
+        }
+        if (statusValue) {
+          updateStatus(teamMemberId, statusValue);
+        } else {
+          notify('Employee updated successfully.', 'success');
+          mtState.editMemberId = '';
+          loadData();
+        }
+      })
+      .withFailureHandler(function(error) {
+        if (_saveBtn) { _saveBtn.disabled = false; _saveBtn.textContent = _saveBtnOrig || 'Save'; }
+        if (typeof setPortalRowSavingV414 === 'function') setPortalRowSavingV414(rowEl, false);
+        notify(error && error.message ? error.message : 'Employee could not be updated.', 'error');
+      })
+      .updateManageTeamEmployeeDetails({
+        sessionToken: token_(),
+        teamMemberId: teamMemberId,
+        name: name,
+        mobile: mobile,
+        hiredDate: hiredDate,
+        assignedRestaurants: [restaurantId]
+      });
+  }
+
+  function deactivateMember(teamMemberId) {
+    var member = getMemberById(teamMemberId);
+    var name = member && member.name ? member.name : 'this employee';
+
+    appConfirmV413('Deactivate ' + name + '?', function() {
+      var rowEl = null;
+      try { var btn = document.querySelector('[data-mtc-deactivate="' + teamMemberId + '"]'); rowEl = btn && typeof findPortalRowV414 === 'function' ? findPortalRowV414(btn) : null; } catch (e) {}
+      if (typeof setPortalRowSavingV414 === 'function') setPortalRowSavingV414(rowEl, true, 'Saving...');
+      google.script.run
+        .withSuccessHandler(function(response) {
+          if (typeof setPortalRowSavingV414 === 'function') setPortalRowSavingV414(rowEl, false);
+          if (!response || !response.success) {
+            notify((response && response.error) || 'Employee could not be deactivated.', 'error');
+            return;
+          }
+          notify('Employee deactivated successfully.', 'success');
+          mtState.editMemberId = '';
+          mtState.tab = 'ALL';
+          mtState.filters.status = 'INACTIVE';
+          loadData();
+        })
+        .withFailureHandler(function(error) {
+          if (typeof setPortalRowSavingV414 === 'function') setPortalRowSavingV414(rowEl, false);
+          notify(error && error.message ? error.message : 'Employee could not be deactivated.', 'error');
+        })
+        .deactivateManageTeamEmployee({
+          sessionToken: token_(),
+          teamMemberId: teamMemberId
+        });
+    }, null, { title: 'Deactivate Employee', okText: 'Deactivate', danger: true });
+  }
+
+  function updateStatus(teamMemberId, status) {
+    if (!teamMemberId || !status) return;
+    // Double-submit guard
+    if (typeof pendingSave_ !== 'undefined' && !pendingSave_.lock('mt_' + teamMemberId)) {
+      notify('Already saving this employee, please wait...', 'info');
+      return;
+    }
+    // Lock all status buttons for this member
+    document.querySelectorAll('[data-mtc-update-status="' + teamMemberId + '"]').forEach(function(b) { b.disabled = true; });
+    google.script.run
+      .withSuccessHandler(function(response) {
+        if (typeof pendingSave_ !== 'undefined') pendingSave_.unlock('mt_' + teamMemberId);
+        document.querySelectorAll('[data-mtc-update-status="' + teamMemberId + '"]').forEach(function(b) { b.disabled = false; });
+        if (!response || !response.success) {
+          notify((response && response.error) || 'Status could not be updated.', 'error');
+          return;
+        }
+        notify('Status updated to ' + status + ' ✓', 'success');
+        mtState.editMemberId = '';
+        loadData();
+      })
+      .withFailureHandler(function(error) {
+        if (typeof pendingSave_ !== 'undefined') pendingSave_.unlock('mt_' + teamMemberId);
+        document.querySelectorAll('[data-mtc-update-status="' + teamMemberId + '"]').forEach(function(b) { b.disabled = false; });
+        notify(error && error.message ? error.message : 'Status could not be updated.', 'error');
+      })
+      .updateTeamMemberStatusFromManageTeam({
+        sessionToken: token_(),
+        teamMemberId: teamMemberId,
+        status: status
+      });
+  }
+
+  function openTransferForMember(teamMemberId) {
+    var member = getMemberById(teamMemberId);
+    mtState.tab = 'TRANSFER';
+    mtState.openMemberId = '';
+    mtState.editMemberId = '';
+    renderPage();
+
+    setTimeout(function() {
+      var fromRestaurant = byId('mtcTransferFromRestaurant');
+      var employee = byId('mtcTransferEmployee');
+      var ids = member ? employeeRestaurantIds(member) : [];
+      if (fromRestaurant && ids.length) {
+        fromRestaurant.value = ids[0];
+        updateTransferEmployeeOptions();
+      }
+      employee = byId('mtcTransferEmployee');
+      if (employee) {
+        employee.value = teamMemberId;
+        updateTransferEmployeeDetails();
+      }
+    }, 0);
+  }
+
+  function renderTransfer() {
+    var content = byId('mtcContent');
+    if (!content) return;
+
+    content.innerHTML = '' +
+      '<div class="mtc-section">' +
+        '<div class="mtc-section-title">Transfer Employee</div>' +
+        '<div class="mtc-transfer-grid">' +
+          '<div class="mtc-field"><label>Restaurant Number<span class="mtc-required">*</span></label><select class="mtc-select" id="mtcTransferFromRestaurant">' + restaurantOptions('', false) + '</select></div>' +
+          '<div class="mtc-field"><label>Employee<span class="mtc-required">*</span></label><select class="mtc-select" id="mtcTransferEmployee"><option value="">Select restaurant first</option></select></div>' +
+          '<div class="mtc-field"><label>Transfer To<span class="mtc-required">*</span></label><select class="mtc-select" id="mtcTransferToRestaurant">' + restaurantOptions('', false) + '</select></div>' +
+          '<div class="mtc-field"><label>Transfer Date<span class="mtc-required">*</span></label><input class="mtc-input" id="mtcTransferDate" type="date"></div>' +
+          '<div class="mtc-transfer-notes"><label>Notes</label><textarea class="mtc-textarea" id="mtcTransferNotes" placeholder="Reason or notes"></textarea></div>' +
+          '<div class="mtc-form-actions"><button class="mtc-btn primary" id="mtcSaveTransferBtn" type="button">Save Transfer</button><button class="mtc-btn" id="mtcClearTransferBtn" type="button">Clear</button></div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="mtc-section"><div class="mtc-section-title">Employee Details and Transfer History</div><div id="mtcTransferDetails" style="padding:12px"></div></div>';
+
+    var fromRestaurant = byId('mtcTransferFromRestaurant');
+    if (fromRestaurant) fromRestaurant.addEventListener('change', updateTransferEmployeeOptions);
+
+    var employee = byId('mtcTransferEmployee');
+    if (employee) employee.addEventListener('change', updateTransferEmployeeDetails);
+
+    var save = byId('mtcSaveTransferBtn');
+    if (save) save.addEventListener('click', transferEmployeeRecord);
+
+    var clear = byId('mtcClearTransferBtn');
+    if (clear) clear.addEventListener('click', clearTransferForm);
+
+    updateTransferEmployeeDetails();
+  }
+
+  function transferEmployeeOptions(selected, restaurantId) {
+    restaurantId = String(restaurantId || '').trim();
+    var rows = (mtState.members || []).filter(function(m) {
+      var status = normalizeStatus(m.status || '');
+      if (status === 'INACTIVE' || status === 'Quit' || status === 'Did Not Show Up') return false;
+      if (!restaurantId) return false;
+      return employeeRestaurantIds(m).indexOf(restaurantId) !== -1;
+    });
+
+    if (!restaurantId) return '<option value="">Select restaurant first</option>';
+    if (!rows.length) return '<option value="">No active employees found</option>';
+
+    return '<option value="">Not Selected</option>' + rows.map(function(m) {
+      var id = getMemberId(m);
+      return '<option value="' + attr(id) + '"' + (String(selected || '') === id ? ' selected' : '') + '>' + esc((m.name || '-') + ' | ' + (m.mobile || '-')) + '</option>';
+    }).join('');
+  }
+
+  function updateTransferEmployeeOptions() {
+    var fromRestaurant = byId('mtcTransferFromRestaurant');
+    var employee = byId('mtcTransferEmployee');
+    if (!employee) return;
+    employee.innerHTML = transferEmployeeOptions('', fromRestaurant ? fromRestaurant.value : '');
+    updateTransferEmployeeDetails();
+  }
+
+  function updateTransferEmployeeDetails() {
+    var select = byId('mtcTransferEmployee');
+    var details = byId('mtcTransferDetails');
+    var current = byId('mtcTransferCurrentRestaurant');
+    var member = select ? getMemberById(select.value) : null;
+
+    if (!member) {
+      if (current) current.value = '';
+      if (details) details.innerHTML = '<div class="mtc-empty">Select an employee to see full details.</div>';
+      return;
+    }
+
+    
+    if (details) details.innerHTML = '<table class="mtc-table"><tbody>' + detailCellsForTransfer(member) + '</tbody></table>';
+  }
+
+  function detailCellsForTransfer(member) {
+    var id = getMemberId(member);
+    var history = getTransferHistoryForMember(id);
+    var base = '' +
+      '<tr><td><strong>Name</strong></td><td>' + esc(member.name || '-') + '</td></tr>' +
+      '<tr><td><strong>Mobile</strong></td><td>' + esc(member.mobile || '-') + '</td></tr>' +
+      '<tr><td><strong>Status</strong></td><td>' + esc(normalizeStatus(member.status || '-')) + '</td></tr>' +
+      '<tr><td><strong>Current Restaurant</strong></td><td>' + esc(employeeRestaurantCodeOnly(member) || '-') + '</td></tr>' +
+      '<tr><td><strong>Hired Date</strong></td><td>' + esc(formatDate(member.hiredDate || member.hired_date)) + '</td></tr>';
+
+    if (!history.length) return base + '<tr><td><strong>Transfer History</strong></td><td>No transfer history found.</td></tr>';
+
+    return base + '<tr><td><strong>Transfer History</strong></td><td>' + history.map(function(item) {
+      return '<div class="mtc-timeline-item">' + esc((item.fromRestaurantName || item.fromRestaurant || '-') + ' to ' + (item.toRestaurantName || item.toRestaurant || '-')) + '<small>' + esc(formatDate(item.transferDate || item.createdAt)) + (item.notes ? ' | ' + item.notes : '') + '</small></div>';
+    }).join('') + '</td></tr>';
+  }
+
+  function clearTransferForm() {
+    ['mtcTransferFromRestaurant', 'mtcTransferEmployee', 'mtcTransferToRestaurant', 'mtcTransferDate', 'mtcTransferNotes'].forEach(function(id) {
+      var el = byId(id);
+      if (el) el.value = '';
+    });
+    updateTransferEmployeeDetails();
+  }
+
+  function transferEmployeeRecord() {
+    var fromRestaurantId = String((byId('mtcTransferFromRestaurant') || {}).value || '').trim();
+    var employeeId = String((byId('mtcTransferEmployee') || {}).value || '').trim();
+    var toRestaurantId = String((byId('mtcTransferToRestaurant') || {}).value || '').trim();
+    var transferDate = String((byId('mtcTransferDate') || {}).value || '').trim();
+    var notes = String((byId('mtcTransferNotes') || {}).value || '').trim();
+
+    if (!fromRestaurantId || !employeeId || !toRestaurantId || !transferDate) {
+      notify('Please select restaurant number, employee, transfer restaurant, and transfer date.', 'error');
+      return;
+    }
+
+    var transferBtn = byId('mtcSaveTransferBtn');
+    if (transferBtn) { transferBtn.disabled = true; transferBtn.textContent = 'Saving…'; }
+
+    google.script.run
+      .withSuccessHandler(function(response) {
+        if (transferBtn) { transferBtn.disabled = false; transferBtn.textContent = 'Save Transfer'; }
+        if (!response || !response.success) {
+          notify((response && response.error) || 'Transfer could not be saved.', 'error');
+          return;
+        }
+        notify('Employee transfer saved successfully.', 'success');
+        clearTransferForm();
+        loadData();
+      })
+      .withFailureHandler(function(error) {
+        if (transferBtn) { transferBtn.disabled = false; transferBtn.textContent = 'Save Transfer'; }
+        notify(error && error.message ? error.message : 'Transfer could not be saved.', 'error');
+      })
+      .transferManageTeamEmployee({
+        sessionToken: token_(),
+        teamMemberId: employeeId,
+        toRestaurantId: toRestaurantId,
+        transferDate: transferDate,
+        notes: notes
+      });
+  }
+
+  function exportCsv() {
+    var rows = getFilteredMembers();
+    if (!rows.length) {
+      notify('No records to export.', 'error');
+      return;
+    }
+
+    var headers = ['Name', 'Mobile', 'Status', 'Restaurant', 'Hired Date'];
+    var csvRows = [headers].concat(rows.map(function(m) {
+      return [m.name || '', m.mobile || '', normalizeStatus(m.status || ''), employeeRestaurantCodeOnly(m) || '', formatDate(m.hiredDate || m.hired_date)];
+    }));
+
+    var csv = csvRows.map(function(row) {
+      return row.map(function(cell) {
+        return '"' + String(cell == null ? '' : cell).replace(/"/g, '""') + '"';
+      }).join(',');
+    }).join('\n');
+
+    var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'manage-team-employees.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function openManageTeamClearview() {
+    injectStyle();
+    showWorkspace();
+    bindEvents();
+    renderToolbar();
+    loadData();
+  }
+
+  window.openManageTeamClearview = openManageTeamClearview;
+  window.openManageTeamPanel_ = openManageTeamClearview;
+  window.openManageTeamPage_ = openManageTeamClearview;
+
+  document.addEventListener('click', function(event) {
+    var target = event.target.closest('[data-role-action="EMPLOYEE_MANAGEMENT"], [data-action="EMPLOYEE_MANAGEMENT"], [data-key="EMPLOYEE_MANAGEMENT"]');
+    if (!target) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    if (typeof closeRoleActionsDropdown_ === 'function') closeRoleActionsDropdown_();
+    openManageTeamClearview();
+    if (typeof renderRoleActions === 'function') renderRoleActions();
+    if (typeof closeRoleActionsDropdown_ === 'function') closeRoleActionsDropdown_();
+  }, true);
+})();
+</script>

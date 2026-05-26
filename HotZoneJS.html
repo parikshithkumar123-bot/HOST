@@ -1,0 +1,991 @@
+<script>
+(function hotzoneModule_() {
+  'use strict';
+
+  var PAGE_SIZE = 10;
+
+  var S = window._hzState = window._hzState || {
+    view: 'list', viewonlyTab: 'newspaper',
+    editions: [], currentEdition: null, contributions: {},
+    templates: [], savedCategories: [], canManage: false, loading: false,
+    editingContrib: null, pendingImage: null, activeSection: null,
+    editionForm: { weekEnding: '', title: '' },
+    calendar: [], calForm: null,
+    _calYear: null, _calMonth: null, _viewingEvent: null,
+    emailDialog: null, emailRecipientData: null,
+    confirmModal: null,
+    scFilter: '', scEditing: null, scSelected: {},
+    _page: 0,
+    _selectedEditions: {},
+    _editionCacheTs: 0,
+    _contribCache: {},
+    _saving: false
+  };
+
+  var SECTIONS = [
+    { key:'WOW_OF_WEEK',       label:'Wow of the Week',          icon:'⭐', color:'#f59e0b' },
+    { key:'HOST_GOALS',        label:'HOST Goals & Operations',  icon:'🏠', color:'#0c2d5a' },
+    { key:'OPERATIONS',        label:'Operations Update',         icon:'⚙',  color:'#163a63' },
+    { key:'TRAINING',          label:'Training & Development',    icon:'🎓', color:'#7c3aed' },
+    { key:'SPOTLIGHT',         label:'Staff Spotlight',           icon:'👊', color:'#db2777' },
+    { key:'PROMOTIONS',        label:'Upcoming Promotions',       icon:'📣', color:'#d97706' },
+    { key:'ACTIVE_MENU',       label:'Active Menu Items',         icon:'🎯', color:'#16a34a' },
+    { key:'DISCONTINUED_MENU', label:'Discontinued Items',        icon:'🚫', color:'#dc2626' },
+    { key:'ANNOUNCEMENTS',     label:'Announcements & Reminders', icon:'🔔', color:'#0891b2' },
+    { key:'EVENTS',            label:'Upcoming Events',           icon:'📅', color:'#7c3aed' }
+  ];
+
+  var SEC_COLORS = {WOW_OF_WEEK:'#f59e0b',HOST_GOALS:'#0c2d5a',OPERATIONS:'#163a63',TRAINING:'#7c3aed',SPOTLIGHT:'#db2777',PROMOTIONS:'#d97706',ACTIVE_MENU:'#16a34a',DISCONTINUED_MENU:'#dc2626',ANNOUNCEMENTS:'#0891b2',EVENTS:'#7c3aed'};
+  var ALL_ROLES = ['SUPER_ADMIN','HR_ADMIN','MRO','SENIOR_MANAGEMENT','RESTAURANT_USER'];
+  var ROLE_LABELS = {SUPER_ADMIN:'Super Admin',HR_ADMIN:'HR Admin',MRO:'MRO',SENIOR_MANAGEMENT:'Senior Management',RESTAURANT_USER:'Restaurant User'};
+
+  function tok(){try{return getSessionToken_?getSessionToken_():sessionStorage.getItem('portalSessionToken')||'';}catch(e){return '';}}
+  function myId(){try{return (window.state&&state.session&&state.session.userId)||'';}catch(e){return '';}}
+  function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+  function byId(id){return document.getElementById(id);}
+  function toast(msg,type){try{showToast(msg,type||'info');}catch(e){console.log(msg);}}
+  function secDef(key){return SECTIONS.find(function(s){return s.key===key;})||{key:key,label:key,icon:'📄',color:'#64748b'};}
+  function fmtDate(iso){if(!iso)return'';try{var d=new Date(iso);return d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});}catch(e){return iso;}}
+  function pageEditions_(){var s=S._page*PAGE_SIZE;return S.editions.slice(s,s+PAGE_SIZE);}
+  function totalPages_(){return Math.max(1,Math.ceil(S.editions.length/PAGE_SIZE));}
+  function selectedCount_(){return Object.keys(S._selectedEditions).length;}
+
+  function injectCSS_(){
+    if(byId('hzv2Css'))return;
+    var s=document.createElement('style');s.id='hzv2Css';
+    s.textContent=[
+      '@import url("https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Playfair+Display:ital,wght@0,700;0,900;1,400&family=Merriweather:wght@700;900&display=swap");',
+      '.hz2-page{font-family:Nunito,Arial,sans-serif;width:100%;min-height:calc(100vh - 120px);background:#f0f4f8;color:#1e293b;box-sizing:border-box}',
+      '.hz2-bar{background:linear-gradient(135deg,#0c2d5a,#163a63);color:#fff;display:flex;align-items:center;justify-content:space-between;padding:12px 20px;gap:10px;position:sticky;top:0;z-index:100;flex-wrap:wrap;box-shadow:0 2px 8px rgba(0,0,0,.3)}',
+      '.hz2-bar-left{display:flex;align-items:center;gap:12px;min-width:0}',
+      '.hz2-bar-title{margin:0;font-size:1.05rem;font-weight:900;white-space:nowrap}',
+      '.hz2-bar-sub{font-size:.7rem;color:rgba(255,255,255,.55);font-weight:600;margin-top:1px}',
+      '.hz2-btn{height:36px;padding:0 16px;border-radius:20px;font-family:inherit;font-size:.82rem;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px;border:none;background:rgba(255,255,255,.14);color:#fff;white-space:nowrap;transition:background .15s,transform .1s,box-shadow .15s;position:relative;overflow:hidden}',
+      '.hz2-btn:hover{background:rgba(255,255,255,.26);color:#fff}',
+      '.hz2-btn:active{transform:scale(.97)}',
+      '.hz2-btn:disabled{opacity:.45;cursor:not-allowed;transform:none}',
+      '.hz2-btn-red{background:linear-gradient(135deg,#b51218,#ef4040);color:#fff}',
+      '.hz2-btn-red:hover{background:linear-gradient(135deg,#9e1015,#d93535);color:#fff;box-shadow:0 3px 10px rgba(181,18,24,.35)}',
+      '.hz2-btn-gold{background:linear-gradient(135deg,#b51218,#e88d07);color:#fff}',
+      '.hz2-btn-gold:hover{background:linear-gradient(135deg,#9e1015,#d07a06);color:#fff;box-shadow:0 3px 10px rgba(181,18,24,.3)}',
+      '.hz2-btn-green{background:linear-gradient(135deg,#15803d,#22c55e);color:#fff}',
+      '.hz2-btn-green:hover{background:linear-gradient(135deg,#126b34,#1da851);color:#fff;box-shadow:0 3px 10px rgba(21,128,61,.3)}',
+      '.hz2-btn-blue{background:linear-gradient(135deg,#1d4ed8,#2563eb);color:#fff}',
+      '.hz2-btn-blue:hover{background:linear-gradient(135deg,#1a44c2,#1f57d4);color:#fff;box-shadow:0 3px 10px rgba(29,78,216,.3)}',
+      '.hz2-btn-dark{background:rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.15);color:#fff}',
+      '.hz2-btn-dark:hover{background:rgba(0,0,0,.32);color:#fff}',
+      '.hz2-btn-saving{opacity:.7;pointer-events:none}',
+      '.hz2-body{padding:20px;max-width:1140px;margin:0 auto}',
+      '.hz2-card{background:#fff;border:none;border-radius:16px;box-shadow:0 1px 3px rgba(0,0,0,.08),0 4px 12px rgba(0,0,0,.06);overflow:hidden;margin-bottom:16px}',
+      '.hz2-card-head{padding:14px 18px;border-bottom:1px solid rgba(0,0,0,.06);display:flex;align-items:center;justify-content:space-between;gap:8px;background:#fafbfc}',
+      '.hz2-card-head h3{margin:0;font-size:.92rem;font-weight:800;color:#0c2d5a}',
+      '.hz2-card-body{padding:16px 18px}',
+      '.hz2-edition-row{display:flex;align-items:center;gap:10px;padding:13px 18px;border-bottom:1px solid rgba(0,0,0,.05);transition:background .15s;cursor:pointer}',
+      '.hz2-edition-row:last-child{border-bottom:none}',
+      '.hz2-edition-row:hover{background:#f5f7ff}',
+      '.hz2-edition-row.hz2-active-edition{background:linear-gradient(135deg,#f0fdf4,#dcfce7);border-left:4px solid #16a34a;padding-left:14px}',
+      '.hz2-edition-row.hz2-selected{background:#eff3ff!important;border-left:3px solid #163a63;padding-left:15px}',
+      '.hz2-edition-title{font-size:.92rem;font-weight:800;color:#0c2d5a;margin:0 0 3px}',
+      '.hz2-edition-meta{font-size:.74rem;color:#64748b}',
+      '.hz2-active-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:999px;font-size:.7rem;font-weight:800;background:#16a34a;color:#fff;margin-left:8px}',
+      '.hz2-pagination{display:flex;align-items:center;justify-content:space-between;padding:12px 18px;border-top:1px solid #f1f5f9;background:#fafbfc}',
+      '.hz2-page-info{font-size:.8rem;font-weight:700;color:#64748b}',
+      '.hz2-page-btns{display:flex;gap:6px}',
+      '.hz2-page-btn{height:30px;padding:0 14px;border-radius:999px;border:1.5px solid #e2e8f0;background:#fff;color:#475569;font-size:.8rem;font-weight:700;cursor:pointer;transition:all .15s}',
+      '.hz2-page-btn:hover:not(:disabled){background:#eff3ff;border-color:#163a63;color:#163a63}',
+      '.hz2-page-btn:disabled{opacity:.4;cursor:not-allowed}',
+      '.hz2-chip{display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;font-size:.7rem;font-weight:800;white-space:nowrap}',
+      '.hz2-chip-draft{background:#fef9c3;color:#854d0e}',
+      '.hz2-chip-saved{background:#dbeafe;color:#1d4ed8}',
+      '.hz2-chip-published{background:#dcfce7;color:#15803d}',
+      '.hz2-chip-grey{background:#f1f5f9;color:#64748b}',
+      '.hz2-form-row{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}',
+      '@media(max-width:600px){.hz2-form-row{grid-template-columns:1fr}}',
+      '.hz2-label{font-size:.72rem;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.06em;display:block;margin-bottom:5px}',
+      '.hz2-input{width:100%;padding:10px 13px;border:1.5px solid #e2e8f0;border-radius:10px;font-family:inherit;font-size:.88rem;color:#1e293b;box-sizing:border-box;outline:none;transition:border-color .15s,box-shadow .15s;background:#fff}',
+      '.hz2-input:focus{border-color:#163a63;box-shadow:0 0 0 3px rgba(22,58,99,.1)}',
+      'textarea.hz2-input{min-height:84px;resize:vertical}',
+      '.hz2-sections{display:grid;grid-template-columns:repeat(auto-fill,minmax(156px,1fr));gap:10px;margin-bottom:18px}',
+      '.hz2-sec-tab{border:2px solid transparent;border-radius:14px;padding:12px 14px;cursor:pointer;transition:all .2s;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.08)}',
+      '.hz2-sec-tab:hover{border-color:#a5b4fc;box-shadow:0 4px 12px rgba(22,58,99,.14);transform:translateY(-1px)}',
+      '.hz2-sec-tab.hz2-active{border-color:#163a63;background:linear-gradient(135deg,#eff3ff,#e8f0fe)}',
+      '.hz2-sec-icon{font-size:1.4rem;margin-bottom:5px}',
+      '.hz2-sec-name{font-size:.78rem;font-weight:800;color:#1e293b;margin:0 0 2px}',
+      '.hz2-sec-count{font-size:.7rem;color:#64748b}',
+      '.hz2-contrib{border:1.5px solid #e8edf5;border-radius:12px;padding:13px;margin-bottom:10px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.05);transition:opacity .25s}',
+      '.hz2-contrib-mine{border-color:#c7d7fc;background:linear-gradient(135deg,#f8faff,#eef3ff)}',
+      '.hz2-contrib-deleting{opacity:.3;pointer-events:none}',
+      '.hz2-contrib-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px}',
+      '.hz2-contrib-title{font-size:.88rem;font-weight:800;color:#1e293b;margin:0}',
+      '.hz2-contrib-body{font-size:.82rem;color:#475569;line-height:1.55;margin:4px 0}',
+      '.hz2-contrib-link{font-size:.8rem;color:#2563eb;text-decoration:none;font-weight:700;display:inline-flex;align-items:center;gap:4px;margin-top:5px}',
+      '.hz2-contrib-link:hover{text-decoration:underline}',
+      '.hz2-contrib-img{width:100%;max-height:140px;object-fit:cover;border-radius:8px;margin:7px 0}',
+      '.hz2-contrib-meta{font-size:.7rem;color:#94a3b8;margin-top:5px}',
+      '.hz2-contrib-actions{display:flex;gap:5px;flex-shrink:0}',
+      '.hz2-icon-btn{width:28px;height:28px;border:1.5px solid #e2e8f0;background:#fff;border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:.8rem;flex-shrink:0;transition:all .15s}',
+      '.hz2-icon-btn:hover{background:#fee2e2;border-color:#dc2626;color:#dc2626}',
+      '.hz2-icon-btn.hz2-edit-btn:hover{background:#dbeafe;border-color:#2563eb;color:#2563eb}',
+      '.hz2-editor{background:#fff;border:2px solid #c7d7fc;border-radius:14px;padding:18px;margin-bottom:16px;box-shadow:0 2px 8px rgba(22,58,99,.07);transition:border-color .3s}',
+      '.hz2-editor.hz2-saved-flash{border-color:#16a34a}',
+      '.hz2-editor-head{font-size:.92rem;font-weight:800;color:#0c2d5a;margin:0 0 14px;display:flex;align-items:center;gap:8px}',
+      '.hz2-img-drop{border:2px dashed #e2e8f0;border-radius:10px;padding:16px;text-align:center;cursor:pointer;background:#f8fafc;font-size:.8rem;color:#94a3b8;transition:border-color .15s}',
+      '.hz2-img-drop:hover{border-color:#163a63;color:#163a63}',
+      '.hz2-img-preview{width:100%;max-height:140px;object-fit:cover;border-radius:8px;margin-top:8px}',
+      '.hz2-tpl-chip{display:inline-flex;align-items:center;gap:5px;padding:4px 11px;background:#f0f4f8;border:1.5px solid #e2e8f0;border-radius:10px;font-size:.78rem;font-weight:700;cursor:pointer;margin:3px;color:#1e293b;transition:all .15s}',
+      '.hz2-tpl-chip:hover{background:#dbeafe;border-color:#2563eb;color:#1d4ed8}',
+      '.hz2-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:500;display:flex;align-items:flex-start;justify-content:center;padding:40px 20px 20px}',
+      '.hz2-dialog{background:#fff;border-radius:20px;max-width:560px;width:100%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.3)}',
+      '.hz2-dialog-head{padding:18px 20px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;justify-content:space-between}',
+      '.hz2-dialog-head h3{margin:0;font-size:1rem;font-weight:800;color:#0c2d5a}',
+      '.hz2-dialog-body{padding:18px 20px;overflow-y:auto;flex:1}',
+      '.hz2-dialog-foot{padding:14px 20px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:10px}',
+      '.hz2-confirm-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:600;display:flex;align-items:flex-start;justify-content:center;padding-top:15vh}',
+      '.hz2-confirm-dialog{background:#fff;border-radius:20px;max-width:400px;width:calc(100% - 40px);box-shadow:0 24px 64px rgba(0,0,0,.35);overflow:hidden}',
+      '.hz2-confirm-head{background:linear-gradient(135deg,#0c2d5a,#163a63);padding:16px 20px}',
+      '.hz2-confirm-head h3{margin:0;font-size:.95rem;font-weight:800;color:#fff}',
+      '.hz2-confirm-body{padding:18px 20px}',
+      '.hz2-confirm-msg{font-size:.92rem;color:#374151;line-height:1.6}',
+      '.hz2-confirm-foot{padding:12px 20px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:10px;background:#fafbfc}',
+      '.hz2-radio-row{display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap}',
+      '.hz2-radio-opt{padding:7px 14px;border-radius:999px;border:2px solid #e2e8f0;font-size:.82rem;font-weight:700;cursor:pointer;color:#475569;transition:all .15s}',
+      '.hz2-radio-opt.selected{border-color:#163a63;background:#eff3ff;color:#163a63}',
+      '.hz2-check-list{display:grid;grid-template-columns:1fr 1fr;gap:6px;max-height:220px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:10px;padding:10px}',
+      '@media(max-width:480px){.hz2-check-list{grid-template-columns:1fr}}',
+      '.hz2-check-item{display:flex;align-items:center;gap:7px;font-size:.84rem;font-weight:600;color:#334155;padding:4px 6px;border-radius:7px;cursor:pointer;transition:background .12s}',
+      '.hz2-check-item:hover{background:#f0f4f8}',
+      '.hz2-check-item input{accent-color:#163a63;width:15px;height:15px;flex-shrink:0}',
+      '.hz2-confirm-banner{background:#dbeafe;border:1.5px solid #93c5fd;border-radius:10px;padding:12px 16px;margin-bottom:12px;font-size:.86rem;font-weight:700;color:#1d4ed8;display:flex;align-items:center;gap:8px}',
+      '.hz2-sc-card{border:1.5px solid #e2e8f0;border-radius:12px;padding:13px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.05);margin-bottom:10px}',
+      '.hz2-sc-card.selected{border-color:#163a63;background:#eff3ff}',
+      '.hz2-sc-badge{display:inline-flex;padding:2px 9px;border-radius:999px;font-size:.68rem;font-weight:800;background:#e0e7ff;color:#3730a3;margin-bottom:6px}',
+      '.hz2-sc-filters{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}',
+      '.hz2-sc-filter-btn{padding:5px 13px;border-radius:999px;border:1.5px solid #e2e8f0;font-size:.78rem;font-weight:700;cursor:pointer;background:#fff;color:#475569;transition:all .15s}',
+      '.hz2-sc-filter-btn.active{background:#163a63;color:#fff;border-color:#163a63}',
+      '.hz2-cal{background:#fff;border-radius:16px;box-shadow:0 2px 8px rgba(0,0,0,.08);overflow:hidden}',
+      '.hz2-cal-head{background:linear-gradient(135deg,#0c2d5a,#163a63);color:#fff;padding:14px 18px;display:flex;align-items:center;justify-content:space-between}',
+      '.hz2-cal-head h4{margin:0;font-size:.95rem;font-weight:800}',
+      '.hz2-cal-grid{display:grid;grid-template-columns:repeat(7,1fr)}',
+      '.hz2-cal-dh{background:#f8fafc;padding:6px 0;text-align:center;font-size:.7rem;font-weight:800;color:#64748b;text-transform:uppercase;border-bottom:1px solid #e2e8f0}',
+      '.hz2-cal-cell{min-height:72px;border:1px solid #f1f5f9;padding:5px;cursor:pointer;transition:background .12s}',
+      '.hz2-cal-cell:hover{background:#f5f7ff}',
+      '.hz2-cal-cell.other-month{background:#f8fafc;opacity:.55}',
+      '.hz2-cal-cell.today{background:#eff3ff;border-color:#a5b4fc}',
+      '.hz2-cal-date{font-size:.78rem;font-weight:700;color:#334155;margin-bottom:3px}',
+      '.hz2-cal-event{background:linear-gradient(135deg,#163a63,#2563eb);color:#fff;border-radius:4px;padding:2px 5px;font-size:.68rem;font-weight:700;margin-bottom:2px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+      '.hz2-event-detail{background:#fff;border-radius:14px;border:2px solid #c7d7fc;padding:18px;margin-top:14px}',
+      '.hz2-event-detail h4{margin:0 0 8px;font-size:1rem;font-weight:800;color:#0c2d5a}',
+      '.hz2-vo-tabs{display:flex;gap:0;border-radius:14px;overflow:hidden;border:2px solid #e2e8f0;margin-bottom:18px}',
+      '.hz2-vo-tab{flex:1;padding:10px 0;text-align:center;font-size:.88rem;font-weight:800;cursor:pointer;transition:all .15s;color:#64748b;background:#f8fafc}',
+      '.hz2-vo-tab.active{background:linear-gradient(135deg,#0c2d5a,#163a63);color:#fff}',
+      '.hz2-status-bar{border-radius:12px;padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}',
+      '.hz2-status-bar.draft{background:#fef9c3;border:1.5px solid #fde68a}',
+      '.hz2-status-bar.saved{background:#dbeafe;border:1.5px solid #93c5fd}',
+      '.hz2-status-bar.published{background:#dcfce7;border:1.5px solid #86efac}',
+      '.hz2-empty{padding:28px;text-align:center;color:#94a3b8;font-size:.84rem;border-radius:10px;border:1.5px dashed #e2e8f0;background:#f8fafc}',
+      '.hz2-shimmer{height:64px;border-radius:12px;background:linear-gradient(90deg,#e2e8f0 25%,#f1f5f9 50%,#e2e8f0 75%);background-size:200% 100%;animation:hz2sh 1.4s infinite linear;margin-bottom:10px}',
+      '@keyframes hz2sh{0%{background-position:200% 0}100%{background-position:-200% 0}}',
+      '@media print{body>*:not(#hz2PrintShell){display:none!important}#hz2PrintShell{display:block!important;position:fixed;inset:0;z-index:99999;background:#fff}*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}}',
+      '@media(max-width:640px){.hz2-sections{grid-template-columns:1fr 1fr}}',
+    ].join('');
+    document.head.appendChild(s);
+  }
+
+  function mountShell_(){
+    if(typeof hideAllPages_==='function')hideAllPages_();
+    var ws=document.getElementById('adminWorkspace')||window.adminWorkspace;
+    var cc=document.querySelector('.center-column');
+    var nl=document.querySelector('.newsletter');
+    if(cc&&ws){cc.innerHTML='';cc.appendChild(ws);cc.style.display='block';}
+    if(nl)nl.style.display='none';
+    if(ws){ws.hidden=false;ws.style.display='grid';}
+    ['adminWorkspaceEyebrow','adminWorkspaceTitle','adminWorkspaceNote'].forEach(function(id){
+      var el=document.getElementById(id)||window[id];if(el){el.textContent='';el.style.display='none';}
+    });
+    var sg=document.getElementById('adminSummaryGrid')||window.adminSummaryGrid;
+    var st=document.getElementById('adminSectionTabs')||window.adminSectionTabs;
+    var sc=document.getElementById('adminSections')||window.adminSections;
+    if(sg)sg.innerHTML='';if(st)st.innerHTML='';
+    if(sc)sc.innerHTML='<div class="hz2-page" id="hz2Root"></div>';
+  }
+
+  function goto_(view){S.view=view;renderView_();}
+
+  function renderView_(){
+    var root=byId('hz2Root');if(!root){setTimeout(renderView_,0);return;}
+    root.innerHTML='';
+    var oldShell=document.getElementById('hz2PrintShell');if(oldShell)oldShell.remove();
+    if(S.view==='viewonly'){
+      root.appendChild(buildViewOnlyBar_());
+      var b=document.createElement('div');b.className='hz2-body';b.innerHTML=buildViewOnlyContent_();
+      root.appendChild(b);bindEvents_();return;
+    }
+    root.appendChild(buildTopbar_());
+    var body=document.createElement('div');body.className='hz2-body';
+    if(S.loading)body.innerHTML='<div class="hz2-shimmer"></div><div class="hz2-shimmer" style="width:80%"></div><div class="hz2-shimmer" style="width:60%"></div>';
+    else if(S.view==='list')    body.innerHTML=buildListView_();
+    else if(S.view==='edition') body.innerHTML=buildEditionView_();
+    else if(S.view==='preview') body.innerHTML=buildPreviewView_(false);
+    else if(S.view==='calendar')body.innerHTML=buildCalendarView_();
+    else if(S.view==='sc')      body.innerHTML=buildSCView_();
+    root.appendChild(body);
+    if(S.confirmModal)root.appendChild(buildConfirmModal_());
+    if(S.emailDialog) root.appendChild(buildEmailDialog_());
+    bindEvents_();
+  }
+
+  // Surgical contrib list patch — avoids full re-render
+  function patchContribList_(){
+    var el=byId('hz2ContribList');
+    if(!el){renderView_();return;}
+    el.innerHTML=buildContribListInner_();
+    bindContribListEvents_(el);
+  }
+
+  // Confirm modal — fixed near top of viewport (15vh from top)
+  function showConfirm_(msg,fn,okLabel){S.confirmModal={message:msg,onConfirm:fn,okLabel:okLabel||'Delete'};renderView_();}
+  function buildConfirmModal_(){
+    var o=document.createElement('div');o.className='hz2-confirm-overlay';o.id='hz2ConfirmOverlay';
+    o.innerHTML='<div class="hz2-confirm-dialog">'+
+      '<div class="hz2-confirm-head"><h3>⚠ Confirm</h3></div>'+
+      '<div class="hz2-confirm-body"><p class="hz2-confirm-msg">'+esc(S.confirmModal.message)+'</p></div>'+
+      '<div class="hz2-confirm-foot">'+
+        '<button class="hz2-btn hz2-btn-dark" id="hz2ConfirmCancel" style="color:#1e293b;background:#f1f5f9;border:1.5px solid #e2e8f0">Cancel</button>'+
+        '<button class="hz2-btn hz2-btn-gold" id="hz2ConfirmOk">'+(S.confirmModal.okLabel||'Confirm')+'</button>'+
+      '</div></div>';
+    return o;
+  }
+
+  function buildTopbar_(){
+    var bar=document.createElement('div');bar.className='hz2-bar';
+    var left='<div class="hz2-bar-left">';
+    if(S.view!=='list')left+='<button class="hz2-btn hz2-btn-dark" id="hz2Back">← Back</button>';
+    else left+='<button class="hz2-btn hz2-btn-dark" id="hz2Close">← Dashboard</button>';
+    var sub={list:'All Editions',preview:'Preview',calendar:'Event Calendar',sc:'Saved Categories'}[S.view]||(S.currentEdition?'Edition: '+esc(S.currentEdition.title||S.currentEdition.week_ending):'');
+    left+='<div><div class="hz2-bar-title">📰 The Saisethsons Hot Zone</div><div class="hz2-bar-sub">'+sub+'</div></div></div>';
+    var right='<div style="display:flex;gap:6px;flex-wrap:wrap">';
+    if(S.view==='list'&&S.canManage){right+='<button class="hz2-btn hz2-btn-dark" id="hz2SCBtn">📚 Saved Categories</button><button class="hz2-btn hz2-btn-blue" id="hz2CalBtn">📅 Calendar</button>';}
+    if(S.view==='calendar')right+='<button class="hz2-btn hz2-btn-gold" id="hz2NewEventBtn">+ Add Event</button>';
+    if(S.view==='edition'&&S.currentEdition){
+      var ed=S.currentEdition,st=String(ed.status||'DRAFT');
+      if(S.canManage){
+        right+='<button class="hz2-btn" id="hz2BrowseSCBtn">📚 Browse Saved</button><button class="hz2-btn" id="hz2PreviewBtn">👁 Preview</button>';
+        if(st==='DRAFT')right+='<button class="hz2-btn hz2-btn-gold" id="hz2SaveBtn">💾 Save</button>';
+        if(st==='SAVED'||st==='DRAFT')right+='<button class="hz2-btn hz2-btn-green" id="hz2PublishBtn">✅ Publish</button>';
+        if(st==='PUBLISHED'){right+='<button class="hz2-btn hz2-btn-dark" id="hz2ReopenBtn">🔓 Reopen</button><button class="hz2-btn hz2-btn-gold" id="hz2MailBtn">✉ Send Email</button>';}
+      }
+    }
+    if(S.view==='preview')right+='<button class="hz2-btn hz2-btn-blue" id="hz2PdfBtn">⬇ Download PDF</button>';
+    right+='</div>';bar.innerHTML=left+right;return bar;
+  }
+
+  function buildViewOnlyBar_(){
+    var bar=document.createElement('div');bar.className='hz2-bar';
+    bar.innerHTML='<div class="hz2-bar-left"><button class="hz2-btn hz2-btn-dark" id="hz2Close">← Dashboard</button>'+
+      '<div><div class="hz2-bar-title">📰 The Saisethsons Hot Zone</div>'+
+      '<div class="hz2-bar-sub">'+(S.viewonlyTab==='newspaper'?'Weekly Edition':'Upcoming Events Calendar')+'</div></div></div>'+
+      '<div style="display:flex;gap:6px">'+(S.viewonlyTab==='newspaper'?'<button class="hz2-btn hz2-btn-blue" id="hz2PdfBtn">⬇ Download PDF</button>':'')+'</div>';
+    return bar;
+  }
+  function buildViewOnlyContent_(){
+    var h='<div class="hz2-vo-tabs">'+
+      '<div class="hz2-vo-tab'+(S.viewonlyTab==='newspaper'?' active':'')+'" id="hz2VoTabNews">📰 Newspaper</div>'+
+      '<div class="hz2-vo-tab'+(S.viewonlyTab==='calendar'?' active':'')+'" id="hz2VoTabCal">📅 Calendar</div>'+
+    '</div>';
+    if(S.viewonlyTab==='newspaper')h+=!S.currentEdition?'<div class="hz2-empty">No published edition found.</div>':buildPreviewView_(true);
+    else h+=buildCalendarViewReadOnly_();
+    return h;
+  }
+
+  function buildListView_(){
+    var h='';
+    if(S.canManage){
+      h+='<div class="hz2-card"><div class="hz2-card-head"><h3>＋ Create New Edition</h3></div><div class="hz2-card-body">'+
+        '<div class="hz2-form-row">'+
+          '<div><label class="hz2-label">Edition Title</label><input class="hz2-input" id="hz2NewTitle" placeholder="e.g. Hot Zone #62" value="'+esc(S.editionForm.title)+'"></div>'+
+          '<div><label class="hz2-label">Week Ending Date</label><input class="hz2-input" id="hz2NewWeekEnd" type="date" value="'+esc(S.editionForm.weekEnding)+'"></div>'+
+        '</div><div style="text-align:right"><button class="hz2-btn hz2-btn-gold" id="hz2CreateBtn">Create Edition</button></div>'+
+      '</div></div>';
+    }
+    var total=S.editions.length,page=pageEditions_(),totalPg=totalPages_(),selCnt=selectedCount_();
+    h+='<div class="hz2-card"><div class="hz2-card-head">'+
+      '<div style="display:flex;align-items:center;gap:10px">'+
+        (S.canManage?'<label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:.82rem;font-weight:700;color:#475569"><input type="checkbox" id="hz2SelectAll"'+(page.length&&page.every(function(ed){return S._selectedEditions[ed.edition_id];})?'checked':'')+' style="accent-color:#163a63;width:15px;height:15px"> Select page</label>':'')+
+        '<h3>📰 All Editions</h3>'+
+      '</div>'+
+      '<div style="display:flex;align-items:center;gap:8px">'+
+        '<span class="hz2-chip hz2-chip-grey">'+total+' total</span>'+
+        (S.canManage&&selCnt?'<button class="hz2-btn hz2-btn-red" id="hz2BulkDeleteBtn" style="height:30px;padding:0 14px;font-size:.78rem">🗑 Delete Selected ('+selCnt+')</button>':'')+
+      '</div></div>';
+    if(!total){
+      h+='<div class="hz2-card-body"><div class="hz2-empty">No editions yet.</div></div>';
+    } else {
+      h+='<div id="hz2EditionList">';
+      page.forEach(function(ed){
+        var isActive=String(ed.status||'')==='PUBLISHED';
+        var isSel=!!S._selectedEditions[ed.edition_id];
+        var rowCls='hz2-edition-row'+(isActive?' hz2-active-edition':'')+(isSel?' hz2-selected':'');
+        var badge=isActive?'<span class="hz2-active-badge">🟢 ACTIVE</span>':ed.status==='SAVED'?'<span class="hz2-chip hz2-chip-saved">Saved</span>':'<span class="hz2-chip hz2-chip-draft">Draft</span>';
+        h+='<div class="'+rowCls+'" data-eid="'+esc(ed.edition_id)+'">'+
+          (S.canManage?'<input type="checkbox" class="hz2-ed-check" data-check-eid="'+esc(ed.edition_id)+'"'+(isSel?' checked':'')+' style="accent-color:#163a63;width:15px;height:15px;flex-shrink:0;cursor:pointer" onclick="event.stopPropagation()">':'')+
+          '<div style="flex:1;min-width:0">'+
+            '<div class="hz2-edition-title">'+esc(ed.title||'Edition - '+ed.week_ending)+(isActive?'<span class="hz2-active-badge" style="font-size:.65rem;padding:2px 7px;margin-left:8px">Currently Published</span>':'')+'</div>'+
+            '<div class="hz2-edition-meta">Week ending '+esc(ed.week_ending)+' · By '+esc(ed.created_by)+' · '+esc(ed.contrib_count||0)+' contributions</div>'+
+          '</div>'+
+          '<div style="display:flex;align-items:center;gap:8px;flex-shrink:0">'+badge+
+            (S.canManage?'<button class="hz2-btn hz2-btn-red" data-del-edition="'+esc(ed.edition_id)+'" style="height:30px;padding:0 10px;font-size:.75rem" onclick="event.stopPropagation()">🗑</button>':'')+
+          '</div></div>';
+      });
+      h+='</div>';
+      if(totalPg>1){
+        h+='<div class="hz2-pagination">'+
+          '<span class="hz2-page-info">Page '+(S._page+1)+' of '+totalPg+'</span>'+
+          '<div class="hz2-page-btns">'+
+            '<button class="hz2-page-btn" id="hz2PagePrev"'+(S._page===0?' disabled':'')+'>‹ Previous</button>'+
+            '<button class="hz2-page-btn" id="hz2PageNext"'+(S._page>=totalPg-1?' disabled':'')+'>Next ›</button>'+
+          '</div></div>';
+      }
+    }
+    h+='</div>';return h;
+  }
+
+  function buildEditionView_(){
+    if(!S.currentEdition)return'<div class="hz2-empty">No edition selected.</div>';
+    var ed=S.currentEdition,status=String(ed.status||'DRAFT'),isPublished=status==='PUBLISHED';
+    var bcls=status==='PUBLISHED'?'published':status==='SAVED'?'saved':'draft';
+    var bmsg=status==='PUBLISHED'?'✅ Published. Reopen to make changes.':status==='SAVED'?'💾 Saved — ready to publish.':'📝 Draft — open. Only you can edit your own posts.';
+    var h='<div class="hz2-status-bar '+bcls+'"><span style="font-size:.83rem;font-weight:700">'+bmsg+'</span></div>';
+    h+='<div class="hz2-sections">';
+    SECTIONS.forEach(function(sec){
+      var items=(S.contributions[sec.key]||[]).filter(function(c){return c.status!=='DELETED';});
+      var active=S.activeSection===sec.key?' hz2-active':'';
+      h+='<div class="hz2-sec-tab'+active+'" data-sec="'+sec.key+'" style="border-left:4px solid '+sec.color+'">'+
+        '<div class="hz2-sec-icon">'+sec.icon+'</div>'+
+        '<div class="hz2-sec-name">'+esc(sec.label)+'</div>'+
+        '<div class="hz2-sec-count">'+items.length+' item'+(items.length!==1?'s':'')+'</div>'+
+      '</div>';
+    });
+    h+='</div>';
+    if(S.activeSection&&!isPublished)h+=buildEditor_();
+    h+='<div id="hz2ContribList">'+(S.activeSection?buildContribListInner_():'<div class="hz2-empty">Select a section above.</div>')+'</div>';
+    return h;
+  }
+
+  function buildEditor_(){
+    var sec=secDef(S.activeSection),editing=S.editingContrib;
+    var pf=editing||{title:'',body:'',image_url:'',link_url:'',link_title:''};
+    var tplHtml='';
+    var myTpls=S.templates.filter(function(t){return t.section===S.activeSection;});
+    if(myTpls.length)tplHtml='<div style="margin-bottom:10px"><label class="hz2-label">📋 Use Template</label>'+myTpls.map(function(t){return'<span class="hz2-tpl-chip" data-tpl-id="'+esc(t.template_id)+'">'+esc(t.title)+'</span>';}).join('')+'</div>';
+    return'<div class="hz2-editor" id="hz2Editor">'+
+      '<div class="hz2-editor-head">'+sec.icon+' '+(editing?'Edit: '+esc(pf.title||sec.label):'Add to '+esc(sec.label))+'</div>'+tplHtml+
+      '<div style="margin-bottom:11px"><label class="hz2-label">Title</label><input class="hz2-input" id="hz2CTitle" value="'+esc(pf.title)+'" placeholder="Short headline..."></div>'+
+      '<div style="margin-bottom:11px"><label class="hz2-label">Details</label><textarea class="hz2-input" id="hz2CBody">'+esc(pf.body)+'</textarea></div>'+
+      '<div class="hz2-form-row" style="margin-bottom:11px">'+
+        '<div><label class="hz2-label">Link Title</label><input class="hz2-input" id="hz2CLinkTitle" value="'+esc(pf.link_title||'')+'" placeholder="e.g. View Details"></div>'+
+        '<div><label class="hz2-label">Link URL</label><input class="hz2-input" id="hz2CLinkUrl" value="'+esc(pf.link_url||'')+'" placeholder="https://..."></div>'+
+      '</div>'+
+      '<div style="margin-bottom:11px"><label class="hz2-label">Photo (optional)</label>'+
+        '<div class="hz2-img-drop" id="hz2ImgDrop" onclick="document.getElementById(\'hz2ImgFile\').click()">'+
+          (pf.image_url?'<img src="'+esc(pf.image_url)+'" class="hz2-img-preview"><br><span>Click to replace</span>':'📷 Click to upload')+
+        '</div><input type="file" id="hz2ImgFile" accept="image/*" style="display:none"></div>'+
+      '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">'+
+        '<div style="display:flex;gap:12px;flex-wrap:wrap">'+
+          '<label style="font-size:.78rem;color:#64748b;display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="hz2SaveTpl"> Save as template</label>'+
+          '<label style="font-size:.78rem;color:#7c3aed;display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="hz2SaveSC"> 📚 Save to Library</label>'+
+        '</div>'+
+        '<div style="display:flex;gap:8px">'+
+          '<button class="hz2-btn hz2-btn-dark" id="hz2CancelEdit" style="color:#1e293b;background:#f1f5f9;border:1.5px solid #e2e8f0">Cancel</button>'+
+          '<button class="hz2-btn hz2-btn-gold" id="hz2CSave">'+(editing?'✓ Update':'+ Add Contribution')+'</button>'+
+        '</div>'+
+      '</div></div>';
+  }
+
+  function buildContribListInner_(){
+    if(!S.activeSection)return'<div class="hz2-empty">Select a section.</div>';
+    var items=(S.contributions[S.activeSection]||[]).filter(function(c){return c.status!=='DELETED';});
+    if(!items.length)return'<div class="hz2-empty">No contributions yet.</div>';
+    var myId_=myId(),isPublished=S.currentEdition&&S.currentEdition.status==='PUBLISHED';
+    var h='';
+    items.forEach(function(item){
+      var isMine=String(item.submitted_by_id||'')===String(myId_);
+      h+='<div class="hz2-contrib'+(isMine?' hz2-contrib-mine':'')+(item._optimisticDeleted?' hz2-contrib-deleting':'')+'" data-cid="'+esc(item.contribution_id)+'">'+
+        '<div class="hz2-contrib-head">'+
+          (item.title?'<div class="hz2-contrib-title">'+esc(item.title)+'</div>':'<div></div>')+
+          (!isPublished&&isMine?'<div class="hz2-contrib-actions"><button class="hz2-icon-btn hz2-edit-btn" data-edit="'+esc(item.contribution_id)+'" title="Edit">✏</button><button class="hz2-icon-btn" data-del="'+esc(item.contribution_id)+'" title="Delete">✕</button></div>':'')+
+        '</div>'+
+        (item.image_url?'<img src="'+esc(item.image_url)+'" class="hz2-contrib-img" referrerpolicy="no-referrer">':'')+
+        (item.body?'<div class="hz2-contrib-body">'+esc(item.body).replace(/\n/g,'<br>')+'</div>':'')+
+        (item.link_url?'<a href="'+esc(item.link_url)+'" target="_blank" rel="noopener" class="hz2-contrib-link">🔗 '+esc(item.link_title||item.link_url)+'</a>':'')+
+        '<div class="hz2-contrib-meta">'+(isMine?'👤 You':esc(item.submitted_by))+' · '+esc((item.submitted_at||'').slice(0,10))+'</div>'+
+      '</div>';
+    });
+    return h;
+  }
+
+  function buildSCView_(){
+    var h='<div class="hz2-sc-filters">'+
+      '<button class="hz2-sc-filter-btn'+(S.scFilter===''?' active':'')+'" data-sc-filter="">All</button>'+
+      SECTIONS.map(function(s){var c=(S.savedCategories||[]).filter(function(x){return x.section===s.key;}).length;return c?'<button class="hz2-sc-filter-btn'+(S.scFilter===s.key?' active':'')+'" data-sc-filter="'+s.key+'">'+s.icon+' '+esc(s.label)+' ('+c+')</button>':'';}).join('')+
+    '</div>';
+    var filtered=(S.savedCategories||[]).filter(function(c){return !S.scFilter||c.section===S.scFilter;});
+    if(!filtered.length)h+='<div class="hz2-empty">No saved categories yet.</div>';
+    else filtered.forEach(function(sc){
+      var sec=secDef(sc.section);
+      h+='<div class="hz2-sc-card"><span class="hz2-sc-badge">'+sec.icon+' '+esc(sec.label)+'</span>'+
+        (sc.title?'<div style="font-size:.92rem;font-weight:800;color:#1e293b;margin-bottom:4px">'+esc(sc.title)+'</div>':'')+
+        (sc.body?'<div style="font-size:.82rem;color:#475569;line-height:1.55;margin-bottom:6px">'+esc(sc.body).replace(/\n/g,'<br>')+'</div>':'')+
+        (sc.image_url?'<img src="'+esc(sc.image_url)+'" referrerpolicy="no-referrer" style="width:100%;max-height:80px;object-fit:cover;border-radius:7px;margin-bottom:6px">':'')+
+        (sc.link_url?'<a href="'+esc(sc.link_url)+'" target="_blank" rel="noopener" class="hz2-contrib-link">🔗 '+esc(sc.link_title||sc.link_url)+'</a>':'')+
+        '<div style="display:flex;gap:6px;margin-top:10px"><button class="hz2-icon-btn hz2-edit-btn" data-edit-sc="'+esc(sc.category_id)+'">✏</button><button class="hz2-icon-btn" data-del-sc="'+esc(sc.category_id)+'">🗑</button></div>'+
+      '</div>';
+    });
+    if(S.scEditing){
+      var pf=S.scEditing,sec2=secDef(pf.section);
+      h+='<div class="hz2-editor" style="margin-top:14px"><div class="hz2-editor-head">'+sec2.icon+' Edit Saved Category</div>'+
+        '<div style="margin-bottom:10px"><label class="hz2-label">Section</label><select class="hz2-input" id="hz2SCSec">'+SECTIONS.map(function(s){return'<option value="'+s.key+'"'+(pf.section===s.key?' selected':'')+'>'+s.label+'</option>';}).join('')+'</select></div>'+
+        '<div style="margin-bottom:10px"><label class="hz2-label">Title</label><input class="hz2-input" id="hz2SCTitle" value="'+esc(pf.title||'')+'"></div>'+
+        '<div style="margin-bottom:10px"><label class="hz2-label">Body</label><textarea class="hz2-input" id="hz2SCBody">'+esc(pf.body||'')+'</textarea></div>'+
+        '<div class="hz2-form-row" style="margin-bottom:10px"><div><label class="hz2-label">Link Title</label><input class="hz2-input" id="hz2SCLinkTitle" value="'+esc(pf.link_title||'')+'"></div><div><label class="hz2-label">Link URL</label><input class="hz2-input" id="hz2SCLinkUrl" value="'+esc(pf.link_url||'')+'"></div></div>'+
+        '<div style="display:flex;justify-content:flex-end;gap:8px"><button class="hz2-btn hz2-btn-dark" id="hz2SCCancelEdit" style="color:#1e293b;background:#f1f5f9;border:1.5px solid #e2e8f0">Cancel</button><button class="hz2-btn hz2-btn-gold" id="hz2SCSaveEdit">Save Changes</button></div>'+
+      '</div>';
+    }
+    return'<div>'+h+'</div>';
+  }
+
+  function buildBrowseSCModal_(){
+    var overlay=document.createElement('div');overlay.className='hz2-overlay';overlay.id='hz2BrowseSCOverlay';
+    var filtered=(S.savedCategories||[]).filter(function(c){return !S.scFilter||c.section===S.scFilter;});
+    var items=filtered.map(function(sc){
+      var sec=secDef(sc.section),sel=S.scSelected[sc.category_id];
+      return'<label class="hz2-sc-card'+(sel?' selected':'')+'" style="display:block;cursor:pointer"><input type="checkbox" data-sc-id="'+esc(sc.category_id)+'"'+(sel?' checked':'')+' style="margin-bottom:6px;accent-color:#163a63"><span class="hz2-sc-badge">'+sec.icon+' '+esc(sec.label)+'</span>'+(sc.title?'<div style="font-size:.88rem;font-weight:800;color:#1e293b;margin:4px 0 2px">'+esc(sc.title)+'</div>':'')+(sc.body?'<div style="font-size:.78rem;color:#475569;max-height:48px;overflow:hidden">'+esc(sc.body)+'</div>':'')+'</label>';
+    }).join('');
+    overlay.innerHTML='<div class="hz2-dialog"><div class="hz2-dialog-head"><h3>📚 Browse Saved Categories</h3><button class="hz2-btn hz2-btn-dark" id="hz2BrowseSCClose" style="padding:0 10px;height:30px">✕</button></div>'+
+      '<div class="hz2-dialog-body"><div class="hz2-sc-filters" style="margin-bottom:12px">'+
+        '<button class="hz2-sc-filter-btn'+(S.scFilter===''?' active':'')+'" data-sc-filter="">All</button>'+
+        SECTIONS.map(function(s){var c=(S.savedCategories||[]).filter(function(x){return x.section===s.key;}).length;return c?'<button class="hz2-sc-filter-btn'+(S.scFilter===s.key?' active':'')+'" data-sc-filter="'+s.key+'">'+s.icon+' '+esc(s.label)+'</button>':'';}).join('')+
+      '</div>'+(items||'<div class="hz2-empty">No saved categories yet.</div>')+'</div>'+
+      '<div class="hz2-dialog-foot"><button class="hz2-btn hz2-btn-dark" id="hz2BrowseSCCancel" style="color:#1e293b;background:#f1f5f9;border:1.5px solid #e2e8f0">Cancel</button><button class="hz2-btn hz2-btn-gold" id="hz2BrowseSCAdd">+ Add Selected</button></div></div>';
+    return overlay;
+  }
+
+  function buildPreviewView_(viewOnly){
+    if(!S.currentEdition)return'<div class="hz2-empty">No edition to preview.</div>';
+    var ed=S.currentEdition,weekStr='Week ending '+(ed.week_ending||'');
+    var cols=[[],[],[]];
+    var now=new Date(),tenDays=new Date(now.getTime()+10*86400000);
+    var upcoming=(S.calendar||[]).filter(function(ev){try{var d=new Date(ev.event_date);return d>=now&&d<=tenDays&&ev.status!=='DELETED';}catch(e){return false;}}).sort(function(a,b){return new Date(a.event_date)-new Date(b.event_date);});
+    SECTIONS.forEach(function(sec,i){
+      var items=(S.contributions[sec.key]||[]).filter(function(c){return c.status!=='DELETED';});
+      var color=SEC_COLORS[sec.key]||'#1a1a1a';
+      if(sec.key==='EVENTS'){
+        if(!items.length&&!upcoming.length)return;
+        var html='<div style="margin-bottom:16px"><div style="-webkit-print-color-adjust:exact;print-color-adjust:exact;background:'+color+';color:#fff;font-size:9px;letter-spacing:.1em;text-transform:uppercase;padding:4px 9px;font-weight:700;margin-bottom:10px;border-radius:3px;font-family:Arial,sans-serif">'+sec.icon+' '+esc(sec.label)+'</div>';
+        if(upcoming.length){
+          html+='<div style="-webkit-print-color-adjust:exact;print-color-adjust:exact;background:#eff6ff;border-left:3px solid #2563eb;padding:7px 10px;border-radius:0 7px 7px 0;margin-bottom:9px"><div style="font-size:9px;font-weight:800;color:#1d4ed8;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px;font-family:Arial,sans-serif">📅 Upcoming — next 10 days</div>'+
+            upcoming.map(function(ev){return'<div style="margin-bottom:7px;padding-bottom:7px;border-bottom:1px dotted #bfdbfe"><div style="font-size:10px;font-weight:700;color:#1d4ed8;font-family:Arial,sans-serif">'+esc(fmtDate(ev.event_date))+'</div><div style="font-size:12px;font-weight:700;color:#1e293b">'+esc(ev.title)+'</div>'+(ev.message?'<div style="font-size:11px;color:#374151;line-height:1.55">'+esc(ev.message)+'</div>':'')+(ev.link_url?'<a href="'+esc(ev.link_url)+'" target="_blank" style="font-size:10px;color:#2563eb;font-weight:700;text-decoration:none">🔗 '+esc(ev.link_title||'View')+'</a>':'')+'</div>';}).join('')+'</div>';
+        }
+        items.forEach(function(item){html+=npItem_(item);});html+='</div>';cols[i%3].push(html);return;
+      }
+      if(!items.length)return;
+      var sHtml='<div style="margin-bottom:16px"><div style="-webkit-print-color-adjust:exact;print-color-adjust:exact;background:'+color+';color:#fff;font-size:9px;letter-spacing:.1em;text-transform:uppercase;padding:4px 9px;font-weight:700;margin-bottom:10px;border-radius:3px;font-family:Arial,sans-serif">'+sec.icon+' '+esc(sec.label)+'</div>';
+      items.forEach(function(item){sHtml+=npItem_(item);});sHtml+='</div>';cols[i%3].push(sHtml);
+    });
+    var logoUrl=(typeof EMBEDDED_HEART_LOGO_URI!=='undefined')?EMBEDDED_HEART_LOGO_URI:'https://drive.google.com/thumbnail?id=1KGIgikEbb7NWKt1vXhT4V10yXLw-ukmA&sz=w200-h200';
+    var qrHtml='';
+    if(String(ed.status||'')==='PUBLISHED'){
+      var viewUrl=ed.qr_url||ed.webapp_url||window.location.href.split('?')[0];
+      qrHtml='<div style="-webkit-print-color-adjust:exact;print-color-adjust:exact;display:flex;align-items:center;gap:8px"><img src="https://api.qrserver.com/v1/create-qr-code/?size=80x80&margin=2&data='+encodeURIComponent(viewUrl)+'" width="72" height="72" style="flex-shrink:0;border:2px solid rgba(255,255,255,.3);border-radius:6px"><div style="font-size:8px;color:rgba(255,255,255,.6);font-family:Arial,sans-serif;line-height:1.5;max-width:90px">📱 Scan to view on your phone</div></div>';
+    }
+    return'<div id="hz2PrintArea" style="font-family:Georgia,serif">'+
+      '<div style="-webkit-print-color-adjust:exact;print-color-adjust:exact;background:linear-gradient(135deg,#091e3a 0%,#163a63 100%);padding:18px 22px">'+
+        '<div style="display:flex;align-items:center;gap:18px">'+
+          '<img src="'+logoUrl+'" referrerpolicy="no-referrer" style="width:60px;height:60px;border-radius:13px;object-fit:contain;flex-shrink:0" onerror="this.style.display=\'none\'">'+
+          '<div style="flex:1;text-align:center"><div style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:rgba(255,255,255,.5);font-family:Arial,sans-serif;margin-bottom:4px">Serve People · Grow Opportunities · Build Champions</div>'+
+            '<div style="font-family:Merriweather,\'Playfair Display\',Georgia,serif;font-size:42px;font-weight:900;line-height:1.05;color:#fff;letter-spacing:-.5px;text-shadow:0 2px 12px rgba(232,141,7,.35)">The Saisethsons Hot Zone</div></div>'+
+          '<div style="flex-shrink:0;display:flex;flex-direction:column;align-items:flex-end;gap:8px"><div style="-webkit-print-color-adjust:exact;print-color-adjust:exact;background:linear-gradient(135deg,#b51218,#e88d07);color:#fff;font-size:9px;font-weight:800;padding:5px 9px;border-radius:7px;font-family:Arial,sans-serif;text-align:center;line-height:1.5">WEEKLY<br>EDITION</div>'+qrHtml+'</div>'+
+        '</div>'+
+        '<div style="display:flex;justify-content:space-between;border-top:1px solid rgba(255,255,255,.15);margin-top:11px;padding-top:9px;font-size:10px;letter-spacing:.08em;text-transform:uppercase;font-family:Arial,sans-serif;color:rgba(255,255,255,.6)"><span>'+esc(ed.title||'')+'</span><span>'+esc(weekStr)+'</span></div>'+
+      '</div>'+
+      '<div style="-webkit-print-color-adjust:exact;print-color-adjust:exact;display:grid;grid-template-columns:1fr 1px 1fr 1px 1fr;background:#fafaf9;padding:16px 18px;gap:0">'+
+        '<div style="padding-right:14px">'+(cols[0].join('')||'<p style="color:#ccc;font-size:13px;font-style:italic">No content this week</p>')+'</div>'+
+        '<div style="-webkit-print-color-adjust:exact;print-color-adjust:exact;background:#e2e8f0"></div>'+
+        '<div style="padding:0 14px">'+(cols[1].join('')||'')+'</div>'+
+        '<div style="-webkit-print-color-adjust:exact;print-color-adjust:exact;background:#e2e8f0"></div>'+
+        '<div style="padding-left:14px">'+(cols[2].join('')||'')+'</div>'+
+      '</div>'+
+      '<div style="-webkit-print-color-adjust:exact;print-color-adjust:exact;background:linear-gradient(135deg,#091e3a,#163a63);color:rgba(255,255,255,.5);display:flex;justify-content:space-between;padding:9px 18px;font-size:9px;letter-spacing:.07em;text-transform:uppercase;font-family:Arial,sans-serif"><span>Saisethsons Hospitality Group · Internal Use Only</span><span>Generated via Sethpitality Portal</span><span>'+esc(ed.week_ending||'')+'</span></div>'+
+    '</div>';
+  }
+
+  function npItem_(item){
+    return'<div style="margin-bottom:13px;padding-bottom:13px;border-bottom:1px dotted #e2e8f0">'+
+      (item.title?'<div style="font-family:\'Playfair Display\',Georgia,serif;font-size:15px;font-weight:700;margin:0 0 5px;line-height:1.2;color:#1a1a1a">'+esc(item.title)+'</div>':'')+
+      (item.image_url?'<img src="'+esc(item.image_url)+'" referrerpolicy="no-referrer" style="width:100%;max-height:100px;object-fit:cover;border-radius:5px;margin:5px 0">':'')+
+      (item.body?'<div style="font-size:13px;line-height:1.7;color:#374151">'+esc(item.body).replace(/\n/g,'<br>')+'</div>':'')+
+      (item.link_url?'<a href="'+esc(item.link_url)+'" target="_blank" style="font-size:11px;color:#2563eb;font-weight:700;text-decoration:none">🔗 '+esc(item.link_title||'View')+'</a>':'')+
+      '<div style="font-size:9px;color:#9ca3af;text-transform:uppercase;letter-spacing:.06em;margin-top:4px;font-family:Arial,sans-serif">— '+esc(item.submitted_by||'')+'</div>'+
+    '</div>';
+  }
+
+  function buildCalendarView_(){return buildCalendarHtml_(true);}
+  function buildCalendarViewReadOnly_(){return buildCalendarHtml_(false);}
+  function buildCalendarHtml_(editable){
+    var now=new Date(),year=S._calYear||now.getFullYear(),month=S._calMonth!=null?S._calMonth:now.getMonth();
+    var monthNames=['January','February','March','April','May','June','July','August','September','October','November','December'];
+    var lastDay=new Date(year,month+1,0);
+    var evMap={};
+    (S.calendar||[]).filter(function(e){return e.status!=='DELETED';}).forEach(function(ev){var k=(ev.event_date||'').slice(0,10);if(!evMap[k])evMap[k]=[];evMap[k].push(ev);});
+    var h='<div class="hz2-cal"><div class="hz2-cal-head"><button class="hz2-btn hz2-btn-dark" id="hz2CalPrev" style="padding:0 10px">‹</button><h4>'+monthNames[month]+' '+year+'</h4><button class="hz2-btn hz2-btn-dark" id="hz2CalNext" style="padding:0 10px">›</button></div><div class="hz2-cal-grid">';
+    ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].forEach(function(d){h+='<div class="hz2-cal-dh">'+d+'</div>';});
+    var startDow=new Date(year,month,1).getDay();
+    for(var p=0;p<startDow;p++)h+='<div class="hz2-cal-cell other-month"></div>';
+    for(var day=1;day<=lastDay.getDate();day++){
+      var ds=year+'-'+(String(month+1).padStart(2,'0'))+'-'+(String(day).padStart(2,'0'));
+      var dayEvs=evMap[ds]||[];
+      h+='<div class="hz2-cal-cell'+(ds===now.toISOString().slice(0,10)?' today':'')+'"'+(editable?' data-cal-date="'+ds+'"':'')+'>'+
+        '<div class="hz2-cal-date">'+day+'</div>'+
+        dayEvs.slice(0,2).map(function(ev){return'<div class="hz2-cal-event" data-ev-id="'+esc(ev.event_id)+'">'+esc(ev.title)+'</div>';}).join('')+
+        (dayEvs.length>2?'<div style="font-size:.65rem;color:#64748b">+'+(dayEvs.length-2)+' more</div>':'')+
+      '</div>';
+    }
+    var trailing=(7-((startDow+lastDay.getDate())%7))%7;
+    for(var t=0;t<trailing;t++)h+='<div class="hz2-cal-cell other-month"></div>';
+    h+='</div></div>';
+    if(editable&&S.calForm!=null)h+=buildCalEventForm_();
+    if(S._viewingEvent)h+=buildCalEventDetail_(editable);
+    return h;
+  }
+  function buildCalEventForm_(){
+    var cf=S.calForm;
+    return'<div class="hz2-event-detail" style="margin-top:16px"><div class="hz2-editor-head">📅 '+(cf.event_id?'Edit Event':'New Event')+'</div>'+
+      '<div class="hz2-form-row"><div><label class="hz2-label">Date</label><input class="hz2-input" id="hz2EvDate" type="date" value="'+esc(cf.event_date||'')+'"></div><div><label class="hz2-label">Title</label><input class="hz2-input" id="hz2EvTitle" value="'+esc(cf.title||'')+'" placeholder="Event title..."></div></div>'+
+      '<div style="margin-bottom:11px"><label class="hz2-label">Message</label><textarea class="hz2-input" id="hz2EvMsg">'+esc(cf.message||'')+'</textarea></div>'+
+      '<div class="hz2-form-row" style="margin-bottom:14px"><div><label class="hz2-label">Link Title</label><input class="hz2-input" id="hz2EvLinkTitle" value="'+esc(cf.link_title||'')+'"></div><div><label class="hz2-label">Link URL</label><input class="hz2-input" id="hz2EvLinkUrl" value="'+esc(cf.link_url||'')+'"></div></div>'+
+      '<div style="display:flex;justify-content:flex-end;gap:8px"><button class="hz2-btn hz2-btn-dark" id="hz2EvCancel" style="color:#1e293b;background:#f1f5f9;border:1.5px solid #e2e8f0">Cancel</button>'+(cf.event_id?'<button class="hz2-btn hz2-btn-red" id="hz2EvDelete">Delete</button>':'')+'<button class="hz2-btn hz2-btn-gold" id="hz2EvSave">Save Event</button></div></div>';
+  }
+  function buildCalEventDetail_(editable){
+    var ev=S._viewingEvent;
+    return'<div class="hz2-event-detail" style="margin-top:16px"><h4>'+esc(ev.title)+'</h4>'+
+      '<div style="font-size:.8rem;color:#2563eb;font-weight:700;margin-bottom:8px">📅 '+esc(fmtDate(ev.event_date))+'</div>'+
+      (ev.message?'<div style="font-size:.88rem;color:#374151;line-height:1.6;margin-bottom:10px">'+esc(ev.message).replace(/\n/g,'<br>')+'</div>':'')+
+      (ev.link_url?'<a href="'+esc(ev.link_url)+'" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:6px;background:#2563eb;color:#fff;padding:8px 16px;border-radius:20px;text-decoration:none;font-size:.82rem;font-weight:700;margin-bottom:10px">🔗 '+esc(ev.link_title||'View Link')+'</a>':'')+'<br>'+
+      '<div style="display:flex;gap:8px;margin-top:8px"><button class="hz2-btn hz2-btn-dark" id="hz2EvDetailClose" style="color:#1e293b;background:#f1f5f9;border:1.5px solid #e2e8f0">Close</button>'+(editable?'<button class="hz2-btn" id="hz2EvDetailEdit" data-ev-id="'+esc(ev.event_id)+'" style="background:#dbeafe;color:#1d4ed8;border:none">✏ Edit</button>':'')+'</div></div>';
+  }
+
+  function buildEmailDialog_(){
+    var dlg=S.emailDialog,rD=S.emailRecipientData||{restaurants:[],brands:[]};
+    var overlay=document.createElement('div');overlay.className='hz2-overlay';overlay.id='hz2EmailOverlay';
+    var modeHtml='<div class="hz2-radio-row">'+['all','role','restaurant','brand'].map(function(m){return'<div class="hz2-radio-opt'+(dlg.mode===m?' selected':'')+'" data-email-mode="'+m+'">'+(({all:'All Active Users',role:'By Role',restaurant:'By Restaurant',brand:'By Brand'})[m])+'</div>';}).join('')+'</div>';
+    var lHtml='';
+    if(dlg.mode==='role')lHtml='<div class="hz2-check-list">'+ALL_ROLES.map(function(r){return'<label class="hz2-check-item"><input type="checkbox" data-role="'+r+'"'+((dlg.roles||[]).indexOf(r)!==-1?' checked':'')+'>'+esc(ROLE_LABELS[r]||r)+'</label>';}).join('')+'</div>';
+    else if(dlg.mode==='restaurant')lHtml='<div style="margin-bottom:8px"><label style="font-size:.78rem;font-weight:700;color:#64748b;cursor:pointer;display:flex;align-items:center;gap:6px"><input type="checkbox" id="hz2RestSelectAll"> Select All</label></div><div class="hz2-check-list">'+rD.restaurants.map(function(r){return'<label class="hz2-check-item"><input type="checkbox" data-rest="'+esc(r)+'"'+((dlg.restaurants||[]).indexOf(r)!==-1?' checked':'')+'>Restaurant '+esc(r)+'</label>';}).join('')+'</div>';
+    else if(dlg.mode==='brand')lHtml='<div class="hz2-check-list">'+rD.brands.map(function(b){return'<label class="hz2-check-item"><input type="checkbox" data-brand="'+esc(b)+'"'+((dlg.brands||[]).indexOf(b)!==-1?' checked':'')+'>'+esc(b)+'</label>';}).join('')+'</div>';
+    var cB=dlg.recipientCount!=null?'<div class="hz2-confirm-banner">ℹ Sending to <strong>'+dlg.recipientCount+'</strong> recipient'+(dlg.recipientCount!==1?'s':'')+'.</div>':'';
+    overlay.innerHTML='<div class="hz2-dialog"><div class="hz2-dialog-head"><h3>✉ Send Hot Zone Email</h3><button class="hz2-btn hz2-btn-dark" id="hz2EmailClose" style="padding:0 10px;height:30px">✕</button></div>'+
+      '<div class="hz2-dialog-body"><label class="hz2-label" style="margin-bottom:8px">Who should receive this?</label>'+modeHtml+lHtml+'<div style="margin-top:12px">'+cB+'</div></div>'+
+      '<div class="hz2-dialog-foot"><button class="hz2-btn hz2-btn-dark" id="hz2EmailCancel" style="color:#1e293b;background:#f1f5f9;border:1.5px solid #e2e8f0">Cancel</button>'+(dlg.recipientCount==null?'<button class="hz2-btn hz2-btn-blue" id="hz2EmailPreview">Check Recipients</button>':'<button class="hz2-btn hz2-btn-gold" id="hz2EmailSend">Send to '+dlg.recipientCount+'</button>')+'</div></div>';
+    return overlay;
+  }
+
+  function bindEvents_(){
+    var back=byId('hz2Back');
+    if(back)back.addEventListener('click',function(){
+      _browseSCOpen=false;S.calForm=null;S._viewingEvent=null;S.scEditing=null;
+      S._saving=false; // reset any stuck save state on navigation
+      if(S.view==='preview')      S.view='edition';
+      else if(S.view==='calendar')S.view=S.currentEdition?'edition':'list';
+      else if(S.view==='sc')      S.view='list';
+      else if(S.view==='edition'){S.view='list';S.currentEdition=null;S.contributions={};S.activeSection=null;}
+      else S.view='list';
+      renderView_();
+    });
+    var close=byId('hz2Close');
+    if(close)close.addEventListener('click',function(){try{if(typeof goBackToDashboardHome==='function')goBackToDashboardHome();else if(typeof restoreDashboardHomeLayout_==='function')restoreDashboardHomeLayout_();}catch(e){}});
+    var voN=byId('hz2VoTabNews'),voC=byId('hz2VoTabCal');
+    if(voN)voN.addEventListener('click',function(){S.viewonlyTab='newspaper';renderView_();});
+    if(voC)voC.addEventListener('click',function(){S.viewonlyTab='calendar';loadCalendar_(function(){renderView_();});});
+
+    var cOk=byId('hz2ConfirmOk');if(cOk)cOk.addEventListener('click',function(){var fn=S.confirmModal&&S.confirmModal.onConfirm;S.confirmModal=null;if(fn)fn();});
+    var cCan=byId('hz2ConfirmCancel');if(cCan)cCan.addEventListener('click',function(){S.confirmModal=null;renderView_();});
+
+    var pdfBtn=byId('hz2PdfBtn');if(pdfBtn)pdfBtn.addEventListener('click',downloadPdf_);
+
+    var calBtn=byId('hz2CalBtn');if(calBtn)calBtn.addEventListener('click',function(){S.view='calendar';S._calYear=new Date().getFullYear();S._calMonth=new Date().getMonth();S.calForm=null;S._viewingEvent=null;loadCalendar_();});
+    var calPrev=byId('hz2CalPrev');if(calPrev)calPrev.addEventListener('click',function(){var m=S._calMonth-1;if(m<0){m=11;S._calYear--;}S._calMonth=m;S.calForm=null;S._viewingEvent=null;renderView_();});
+    var calNext=byId('hz2CalNext');if(calNext)calNext.addEventListener('click',function(){var m=S._calMonth+1;if(m>11){m=0;S._calYear++;}S._calMonth=m;S.calForm=null;S._viewingEvent=null;renderView_();});
+    var newEv=byId('hz2NewEventBtn');if(newEv)newEv.addEventListener('click',function(){S.calForm={event_date:'',title:'',message:'',link_url:'',link_title:''};S._viewingEvent=null;renderView_();});
+    document.querySelectorAll('[data-cal-date]').forEach(function(cell){cell.addEventListener('click',function(e){if(e.target.closest('[data-ev-id]'))return;S.calForm={event_date:this.dataset.calDate,title:'',message:'',link_url:'',link_title:''};S._viewingEvent=null;renderView_();});});
+    document.querySelectorAll('[data-ev-id]').forEach(function(chip){chip.addEventListener('click',function(e){e.stopPropagation();var ev=(S.calendar||[]).find(function(x){return x.event_id===this.dataset.evId;},this);if(ev){S._viewingEvent=ev;S.calForm=null;renderView_();}});});
+    var evDC=byId('hz2EvDetailClose');if(evDC)evDC.addEventListener('click',function(){S._viewingEvent=null;renderView_();});
+    var evDE=byId('hz2EvDetailEdit');if(evDE)evDE.addEventListener('click',function(){var ev=(S.calendar||[]).find(function(x){return x.event_id===this.dataset.evId;},this);if(ev){S.calForm=JSON.parse(JSON.stringify(ev));S._viewingEvent=null;renderView_();}});
+    var evCan=byId('hz2EvCancel');if(evCan)evCan.addEventListener('click',function(){S.calForm=null;S._viewingEvent=null;renderView_();});
+    var evSave=byId('hz2EvSave');if(evSave)evSave.addEventListener('click',saveCalEvent_);
+    var evDel=byId('hz2EvDelete');if(evDel)evDel.addEventListener('click',function(){showConfirm_('Delete this calendar event?',function(){delCalEvent_(S.calForm.event_id);});});
+
+    var pgPrev=byId('hz2PagePrev');if(pgPrev)pgPrev.addEventListener('click',function(){if(S._page>0){S._page--;S._selectedEditions={};renderView_();}});
+    var pgNext=byId('hz2PageNext');if(pgNext)pgNext.addEventListener('click',function(){if(S._page<totalPages_()-1){S._page++;S._selectedEditions={};renderView_();}});
+
+    var selAll=byId('hz2SelectAll');
+    if(selAll)selAll.addEventListener('change',function(){
+      pageEditions_().forEach(function(ed){if(this.checked)S._selectedEditions[ed.edition_id]=true;else delete S._selectedEditions[ed.edition_id];},this);
+      // Surgical DOM update — no full re-render
+      document.querySelectorAll('.hz2-ed-check').forEach(function(cb){
+        cb.checked=!!S._selectedEditions[cb.dataset.checkEid];
+        var row=cb.closest('.hz2-edition-row');
+        if(row){if(cb.checked)row.classList.add('hz2-selected');else row.classList.remove('hz2-selected');}
+      });
+      var cnt=selectedCount_(),bulkBtn=byId('hz2BulkDeleteBtn');
+      if(bulkBtn){bulkBtn.textContent='🗑 Delete Selected ('+cnt+')';bulkBtn.style.display=cnt?'':'none';}
+      selAll.indeterminate=!selAll.checked&&pageEditions_().some(function(ed){return S._selectedEditions[ed.edition_id];});
+    });
+
+    document.querySelectorAll('.hz2-ed-check').forEach(function(cb){
+      cb.addEventListener('change',function(e){
+        e.stopPropagation();
+        if(this.checked)S._selectedEditions[this.dataset.checkEid]=true;else delete S._selectedEditions[this.dataset.checkEid];
+        var row=this.closest('.hz2-edition-row');
+        if(row){if(this.checked)row.classList.add('hz2-selected');else row.classList.remove('hz2-selected');}
+        var cnt=selectedCount_(),bulkBtn=byId('hz2BulkDeleteBtn');
+        if(cnt){
+          if(!bulkBtn){renderView_();}
+          else{bulkBtn.textContent='🗑 Delete Selected ('+cnt+')';bulkBtn.style.display='';}
+        } else {
+          if(bulkBtn)bulkBtn.style.display='none';
+        }
+        var sa=byId('hz2SelectAll');
+        if(sa){sa.checked=pageEditions_().every(function(ed){return S._selectedEditions[ed.edition_id];});sa.indeterminate=!sa.checked&&pageEditions_().some(function(ed){return S._selectedEditions[ed.edition_id];});}
+      });
+    });
+
+    var bulkBtn=byId('hz2BulkDeleteBtn');
+    if(bulkBtn)bulkBtn.addEventListener('click',function(){
+      var ids=Object.keys(S._selectedEditions);if(!ids.length)return;
+      showConfirm_('Delete '+ids.length+' edition'+(ids.length>1?'s':'')+' and all their contributions? This cannot be undone.',function(){bulkDeleteEditions_(ids);});
+    });
+
+    document.querySelectorAll('[data-del-edition]').forEach(function(btn){
+      btn.addEventListener('click',function(e){e.stopPropagation();var eid=this.dataset.delEdition;showConfirm_('Delete this edition and all its contributions? This cannot be undone.',function(){deleteEdition_(eid);});});
+    });
+    document.querySelectorAll('[data-eid]').forEach(function(row){
+      row.addEventListener('click',function(e){if(e.target.closest('[data-del-edition]')||e.target.classList.contains('hz2-ed-check'))return;openEdition_(this.dataset.eid);});
+    });
+
+    document.querySelectorAll('[data-sec]').forEach(function(tab){tab.addEventListener('click',function(){S.activeSection=this.dataset.sec;S.editingContrib=null;S.pendingImage=null;S._saving=false;renderView_();});});
+    var cancel=byId('hz2CancelEdit');if(cancel)cancel.addEventListener('click',function(){S.editingContrib=null;S.pendingImage=null;S._saving=false;renderView_();});
+    var csave=byId('hz2CSave');if(csave)csave.addEventListener('click',saveContrib_);
+    var imgFile=byId('hz2ImgFile');if(imgFile)imgFile.addEventListener('change',handleImg_);
+    var cList=byId('hz2ContribList');if(cList)bindContribListEvents_(cList);
+
+    document.querySelectorAll('[data-tpl-id]').forEach(function(chip){
+      chip.addEventListener('click',function(){
+        var tpl=S.templates.find(function(t){return t.template_id===this.dataset.tplId;},this);if(!tpl)return;
+        var te=byId('hz2CTitle'),be=byId('hz2CBody'),lu=byId('hz2CLinkUrl'),lt=byId('hz2CLinkTitle');
+        if(te)te.value=tpl.title||'';if(be)be.value=tpl.body||'';if(lu)lu.value=tpl.link_url||'';if(lt)lt.value=tpl.link_title||'';
+      });
+    });
+
+    var prevBtn=byId('hz2PreviewBtn');if(prevBtn)prevBtn.addEventListener('click',function(){loadCalendar_(function(){goto_('preview');});});
+    var saveBtn=byId('hz2SaveBtn');if(saveBtn)saveBtn.addEventListener('click',function(){updateEditionStatus_('SAVED');});
+    var pubBtn=byId('hz2PublishBtn');if(pubBtn)pubBtn.addEventListener('click',function(){showConfirm_('Publish this edition? It will be visible to all users.',function(){updateEditionStatus_('PUBLISHED');},'Publish');});
+    var reopenBtn=byId('hz2ReopenBtn');if(reopenBtn)reopenBtn.addEventListener('click',function(){showConfirm_('Reopen this edition for editing?',function(){updateEditionStatus_('DRAFT');},'Reopen');});
+    var mailBtn=byId('hz2MailBtn');if(mailBtn)mailBtn.addEventListener('click',openEmailDialog_);
+
+    var scBtn=byId('hz2SCBtn');if(scBtn)scBtn.addEventListener('click',function(){S.view='sc';S.scEditing=null;loadSavedCategories_(function(){goto_('sc');});});
+    document.querySelectorAll('[data-sc-filter]').forEach(function(btn){btn.addEventListener('click',function(){S.scFilter=this.dataset.scFilter;renderView_();});});
+    var scCE=byId('hz2SCCancelEdit');if(scCE)scCE.addEventListener('click',function(){S.scEditing=null;renderView_();});
+    var scSE=byId('hz2SCSaveEdit');if(scSE)scSE.addEventListener('click',saveSCEdit_);
+    document.querySelectorAll('[data-edit-sc]').forEach(function(btn){btn.addEventListener('click',function(e){e.stopPropagation();var sc=(S.savedCategories||[]).find(function(c){return c.category_id===this.dataset.editSc;},this);if(sc){S.scEditing=JSON.parse(JSON.stringify(sc));renderView_();}});});
+    document.querySelectorAll('[data-del-sc]').forEach(function(btn){btn.addEventListener('click',function(e){e.stopPropagation();var cid=this.dataset.delSc;showConfirm_('Delete this saved category?',function(){delSavedCategory_(cid);});});});
+
+    var bscBtn=byId('hz2BrowseSCBtn');
+    if(bscBtn)bscBtn.addEventListener('click',function(){_browseSCOpen=true;S.scFilter='';S.scSelected={};loadSavedCategories_(function(){var o=buildBrowseSCModal_();var root=byId('hz2Root');if(root)root.appendChild(o);bindBrowseSCEvents_();});});
+
+    var createBtn=byId('hz2CreateBtn');if(createBtn)createBtn.addEventListener('click',createEdition_);
+
+    var eClose=byId('hz2EmailClose');if(eClose)eClose.addEventListener('click',closeEmailDialog_);
+    var eCan=byId('hz2EmailCancel');if(eCan)eCan.addEventListener('click',closeEmailDialog_);
+    var eOver=byId('hz2EmailOverlay');if(eOver)eOver.addEventListener('click',function(e){if(e.target===this)closeEmailDialog_();});
+    document.querySelectorAll('[data-email-mode]').forEach(function(o){o.addEventListener('click',function(){if(S.emailDialog){S.emailDialog.mode=this.dataset.emailMode;S.emailDialog.recipientCount=null;renderView_();}});});
+    var rAll=byId('hz2RestSelectAll');if(rAll)rAll.addEventListener('change',function(){document.querySelectorAll('[data-rest]').forEach(function(cb){cb.checked=rAll.checked;});syncEmailSelections_();});
+    document.querySelectorAll('[data-role],[data-rest],[data-brand]').forEach(function(cb){cb.addEventListener('change',function(){syncEmailSelections_();});});
+    var epBtn=byId('hz2EmailPreview');if(epBtn)epBtn.addEventListener('click',previewEmailRecipients_);
+    var esBtn=byId('hz2EmailSend');if(esBtn)esBtn.addEventListener('click',sendEmail_);
+  }
+
+  function bindContribListEvents_(container){
+    if(!container)return;
+    container.querySelectorAll('[data-edit]').forEach(function(btn){
+      btn.addEventListener('click',function(e){
+        e.stopPropagation();
+        var sec=S.contributions[S.activeSection]||[];
+        var found=sec.find(function(c){return c.contribution_id===this.dataset.edit;},this);
+        S.editingContrib=found?JSON.parse(JSON.stringify(found)):null;S.pendingImage=null;
+        renderView_();
+        setTimeout(function(){var el=byId('hz2CTitle');if(el)el.scrollIntoView({behavior:'smooth',block:'center'});},50);
+      });
+    });
+    container.querySelectorAll('[data-del]').forEach(function(btn){
+      btn.addEventListener('click',function(e){e.stopPropagation();var cid=this.dataset.del;showConfirm_('Delete this contribution?',function(){delContrib_(cid);});});
+    });
+  }
+
+  var _browseSCOpen=false;
+  function bindBrowseSCEvents_(){
+    var overlay=byId('hz2BrowseSCOverlay');if(!overlay)return;
+    var cSC=byId('hz2BrowseSCClose');if(cSC)cSC.addEventListener('click',function(){_browseSCOpen=false;overlay.remove();});
+    var canSC=byId('hz2BrowseSCCancel');if(canSC)canSC.addEventListener('click',function(){_browseSCOpen=false;overlay.remove();});
+    overlay.addEventListener('click',function(e){if(e.target===this){_browseSCOpen=false;overlay.remove();}});
+    overlay.querySelectorAll('[data-sc-filter]').forEach(function(btn){btn.addEventListener('click',function(){S.scFilter=this.dataset.scFilter;var no=buildBrowseSCModal_();overlay.replaceWith(no);bindBrowseSCEvents_();});});
+    overlay.querySelectorAll('[data-sc-id]').forEach(function(cb){cb.addEventListener('change',function(){if(this.checked)S.scSelected[this.dataset.scId]=true;else delete S.scSelected[this.dataset.scId];});});
+    var addBtn=byId('hz2BrowseSCAdd');
+    if(addBtn)addBtn.addEventListener('click',function(){
+      var toAdd=(S.savedCategories||[]).filter(function(c){return S.scSelected[c.category_id];});
+      if(!toAdd.length){toast('Select at least one item.','error');return;}
+      if(!S.currentEdition)return;
+      var pending=toAdd.length,saved=0;
+      toAdd.forEach(function(sc){
+        google.script.run
+          .withSuccessHandler(function(){saved++;if(saved===pending){_browseSCOpen=false;overlay.remove();S.scSelected={};toast('Added '+saved+'!','success');openEdition_(S.currentEdition.edition_id,true);}})
+          .withFailureHandler(function(){saved++;if(saved===pending){_browseSCOpen=false;overlay.remove();openEdition_(S.currentEdition.edition_id,true);}})
+          .saveHotzoneContribution({sessionToken:tok(),edition_id:S.currentEdition.edition_id,section:sc.section,title:sc.title||'',body:sc.body||'',link_url:sc.link_url||'',link_title:sc.link_title||'',image_url:sc.image_url||'',image_file_id:'',contribution_id:'',save_as_template:''});
+      });
+    });
+  }
+
+  function handleImg_(e){
+    var file=e.target.files[0];if(!file)return;
+    var drop=byId('hz2ImgDrop');if(drop)drop.innerHTML='<span style="color:#163a63;font-weight:700">Reading...</span>';
+    var reader=new FileReader();
+    reader.onload=function(ev){S.pendingImage={base64:ev.target.result.split(',')[1],fileName:file.name,mimeType:file.type};if(drop)drop.innerHTML='<img src="'+ev.target.result+'" class="hz2-img-preview"><br><span>Click to replace</span>';};
+    reader.readAsDataURL(file);
+  }
+
+  function downloadPdf_(){
+    var area=byId('hz2PrintArea');if(!area){toast('No newspaper to print.','error');return;}
+    var shell=document.createElement('div');shell.id='hz2PrintShell';shell.style.cssText='display:none;position:fixed;inset:0;z-index:99999;background:#fff;overflow:auto;padding:0';
+    shell.innerHTML=area.outerHTML;document.body.appendChild(shell);window.print();
+    setTimeout(function(){var s=document.getElementById('hz2PrintShell');if(s)s.remove();},1000);
+  }
+
+  function openEmailDialog_(){
+    google.script.run
+      .withSuccessHandler(function(res){S.emailRecipientData=(res&&res.data)||{restaurants:[],brands:[]};S.emailDialog={mode:'all',roles:[],restaurants:[],brands:[],recipientCount:null};renderView_();})
+      .withFailureHandler(function(){S.emailDialog={mode:'all',roles:[],restaurants:[],brands:[],recipientCount:null};renderView_();})
+      .getHotzoneEmailRecipientData({sessionToken:tok()});
+  }
+  function closeEmailDialog_(){S.emailDialog=null;renderView_();}
+  function syncEmailSelections_(){
+    if(!S.emailDialog)return;
+    S.emailDialog.roles=[];S.emailDialog.restaurants=[];S.emailDialog.brands=[];S.emailDialog.recipientCount=null;
+    document.querySelectorAll('[data-role]:checked').forEach(function(cb){S.emailDialog.roles.push(cb.dataset.role);});
+    document.querySelectorAll('[data-rest]:checked').forEach(function(cb){S.emailDialog.restaurants.push(cb.dataset.rest);});
+    document.querySelectorAll('[data-brand]:checked').forEach(function(cb){S.emailDialog.brands.push(cb.dataset.brand);});
+  }
+  function previewEmailRecipients_(){
+    if(!S.emailDialog)return;syncEmailSelections_();
+    var btn=byId('hz2EmailPreview');if(btn){btn.disabled=true;btn.textContent='Checking...';}
+    google.script.run
+      .withSuccessHandler(function(res){if(btn){btn.disabled=false;btn.textContent='Check Recipients';}if(!res||!res.success){toast((res&&res.error)||'Failed.','error');return;}if(S.emailDialog)S.emailDialog.recipientCount=(res.data&&res.data.count)||0;renderView_();})
+      .withFailureHandler(function(e){if(btn){btn.disabled=false;btn.textContent='Check Recipients';}toast(e&&e.message?e.message:'Failed.','error');})
+      .previewHotzoneEmailRecipients({sessionToken:tok(),mode:S.emailDialog.mode,roles:S.emailDialog.roles,restaurants:S.emailDialog.restaurants,brands:S.emailDialog.brands});
+  }
+  function sendEmail_(){
+    if(!S.emailDialog)return;syncEmailSelections_();
+    var btn=byId('hz2EmailSend');if(btn){btn.disabled=true;btn.textContent='Sending...';}
+    google.script.run
+      .withSuccessHandler(function(res){if(btn)btn.disabled=false;if(!res||!res.success){toast((res&&res.error)||'Failed.','error');return;}toast('Sent to '+(res.data&&res.data.sent)+'!','success');closeEmailDialog_();})
+      .withFailureHandler(function(e){if(btn){btn.disabled=false;}toast(e&&e.message?e.message:'Send failed.','error');})
+      .sendHotzoneEmail({sessionToken:tok(),edition_id:S.currentEdition&&S.currentEdition.edition_id,mode:S.emailDialog.mode,roles:S.emailDialog.roles,restaurants:S.emailDialog.restaurants,brands:S.emailDialog.brands});
+  }
+
+  var EDITIONS_CACHE_TTL=30000;
+
+  function loadEditions_(forceRefresh){
+    if(!forceRefresh&&S.editions.length&&(Date.now()-S._editionCacheTs)<EDITIONS_CACHE_TTL){renderView_();return;}
+    S.loading=true;renderView_();
+    google.script.run
+      .withSuccessHandler(function(res){
+        S.loading=false;if(typeof portalHideLoadingV414==='function')portalHideLoadingV414();
+        if(!res||!res.success){toast((res&&res.error)||'Could not load editions.','error');return;}
+        S.editions=(res.data&&res.data.editions)||[];S.canManage=!!(res.data&&res.data.canManage);S.templates=(res.data&&res.data.templates)||[];
+        S._editionCacheTs=Date.now();S._page=0;renderView_();
+      })
+      .withFailureHandler(function(e){S.loading=false;if(typeof portalHideLoadingV414==='function')portalHideLoadingV414();toast(e&&e.message?e.message:'Load failed.','error');renderView_();})
+      .getHotzoneEditions({sessionToken:tok()});
+  }
+
+  function openEdition_(eid,forceRefresh){
+    if(!forceRefresh&&S._contribCache[eid]){
+      var c=S._contribCache[eid];S.currentEdition=c.edition;S.contributions=c.contributions;S.templates=c.templates||S.templates;
+      S.view='edition';S.activeSection=null;S.editingContrib=null;renderView_();return;
+    }
+    S.loading=true;S.view='edition';S.activeSection=null;S.editingContrib=null;renderView_();
+    google.script.run
+      .withSuccessHandler(function(res){
+        S.loading=false;if(!res||!res.success){toast((res&&res.error)||'Load failed.','error');return;}
+        S.currentEdition=(res.data&&res.data.edition)||null;S.contributions=(res.data&&res.data.contributions)||{};S.templates=(res.data&&res.data.templates)||S.templates;
+        if(S.currentEdition)S._contribCache[eid]={edition:S.currentEdition,contributions:S.contributions,templates:S.templates};
+        renderView_();
+      })
+      .withFailureHandler(function(e){S.loading=false;toast(e&&e.message?e.message:'Load failed.','error');})
+      .getHotzoneEditionDetail({sessionToken:tok(),edition_id:eid});
+  }
+
+  function createEdition_(){
+    var title=(byId('hz2NewTitle')||{}).value||'',weekEnd=(byId('hz2NewWeekEnd')||{}).value||'';
+    if(!title.trim()){toast('Enter an edition title.','error');return;}if(!weekEnd){toast('Select a week ending date.','error');return;}
+    var btn=byId('hz2CreateBtn');if(btn){btn.disabled=true;btn.textContent='Creating...';}
+    google.script.run
+      .withSuccessHandler(function(res){if(!res||!res.success){toast((res&&res.error)||'Create failed.','error');if(btn){btn.disabled=false;btn.textContent='Create Edition';}return;}toast('Edition created!','success');S.editionForm={title:'',weekEnding:''};S._editionCacheTs=0;loadEditions_(true);})
+      .withFailureHandler(function(e){toast(e&&e.message?e.message:'Create failed.','error');if(btn){btn.disabled=false;btn.textContent='Create Edition';}})
+      .createHotzoneEdition({sessionToken:tok(),title:title.trim(),week_ending:weekEnd});
+  }
+
+  function deleteEdition_(eid){
+    var removed=S.editions.find(function(e){return e.edition_id===eid;});
+    S.editions=S.editions.filter(function(e){return e.edition_id!==eid;});
+    delete S._contribCache[eid];delete S._selectedEditions[eid];S._editionCacheTs=0;renderView_();
+    google.script.run
+      .withSuccessHandler(function(res){if(!res||!res.success){if(removed)S.editions.unshift(removed);toast((res&&res.error)||'Delete failed.','error');renderView_();return;}toast('Deleted.','info');})
+      .withFailureHandler(function(e){if(removed)S.editions.unshift(removed);toast(e&&e.message?e.message:'Delete failed.','error');renderView_();})
+      .deleteHotzoneEdition({sessionToken:tok(),edition_id:eid});
+  }
+
+  function bulkDeleteEditions_(ids){
+    var removed=S.editions.filter(function(e){return ids.indexOf(e.edition_id)!==-1;});
+    S.editions=S.editions.filter(function(e){return ids.indexOf(e.edition_id)===-1;});
+    ids.forEach(function(id){delete S._contribCache[id];delete S._selectedEditions[id];});S._editionCacheTs=0;renderView_();
+    google.script.run
+      .withSuccessHandler(function(res){if(!res||!res.success){removed.forEach(function(e){S.editions.unshift(e);});toast((res&&res.error)||'Bulk delete failed.','error');renderView_();return;}toast('Deleted '+ids.length+'!','info');})
+      .withFailureHandler(function(e){removed.forEach(function(r){S.editions.unshift(r);});toast(e&&e.message?e.message:'Bulk delete failed.','error');renderView_();})
+      .batchDeleteHotzoneEditions({sessionToken:tok(),edition_ids:ids});
+  }
+
+  function saveContrib_(){
+    if(S._saving){toast('Already saving...','info');return;}
+    var title=(byId('hz2CTitle')||{}).value||'',body=(byId('hz2CBody')||{}).value||'';
+    var linkUrl=(byId('hz2CLinkUrl')||{}).value||'',linkTitle=(byId('hz2CLinkTitle')||{}).value||'';
+    var saveTpl=byId('hz2SaveTpl')&&byId('hz2SaveTpl').checked;
+    var saveSC=byId('hz2SaveSC')&&byId('hz2SaveSC').checked;
+    if(!title.trim()&&!body.trim()){toast('Add a title or body.','error');return;}
+    S._saving=true;
+    var btn=byId('hz2CSave');if(btn){btn.classList.add('hz2-btn-saving');btn.textContent=S.editingContrib?'Updating…':'Saving…';}
+    function doSave(imgUrl,fileId){
+      var now=new Date().toISOString(),section=S.activeSection,editing=S.editingContrib;
+      var newItem={contribution_id:editing?editing.contribution_id:'_tmp_'+now,edition_id:S.currentEdition&&S.currentEdition.edition_id,section:section,title:title.trim(),body:body.trim(),link_url:linkUrl.trim(),link_title:linkTitle.trim(),image_url:imgUrl||(editing&&editing.image_url)||'',image_file_id:fileId||'',submitted_by:myId()||'You',submitted_by_id:myId(),submitted_at:now,status:'ACTIVE'};
+      if(!S.contributions[section])S.contributions[section]=[];
+      var prevItems=JSON.parse(JSON.stringify(S.contributions[section]));
+      if(editing){S.contributions[section]=S.contributions[section].map(function(c){return c.contribution_id===editing.contribution_id?newItem:c;});}
+      else{S.contributions[section].push(newItem);}
+      if(S.currentEdition&&S._contribCache[S.currentEdition.edition_id])S._contribCache[S.currentEdition.edition_id].contributions=S.contributions;
+      S.editingContrib=null;S.pendingImage=null;
+      var editor=byId('hz2Editor');if(editor){editor.classList.add('hz2-saved-flash');setTimeout(function(){var e=byId('hz2Editor');if(e)e.classList.remove('hz2-saved-flash');},600);}
+      patchContribList_();
+      // Re-query after patch — closure btn refers to stale DOM element
+      var freshBtn=byId('hz2CSave');
+      if(freshBtn){freshBtn.classList.remove('hz2-btn-saving');freshBtn.textContent='+ Add Contribution';}
+      else if(btn){btn.classList.remove('hz2-btn-saving');btn.textContent='+ Add Contribution';}
+      google.script.run
+        .withSuccessHandler(function(res){
+          S._saving=false;
+          var sb=byId('hz2CSave');if(sb){sb.classList.remove('hz2-btn-saving');}
+          if(!res||!res.success){S.contributions[section]=prevItems;if(S.currentEdition&&S._contribCache[S.currentEdition.edition_id])S._contribCache[S.currentEdition.edition_id].contributions=S.contributions;toast((res&&res.error)||'Save failed — rolled back.','error');renderView_();return;}
+          if(res.data&&res.data.contribution_id&&newItem.contribution_id.startsWith('_tmp_')){S.contributions[section]=S.contributions[section].map(function(c){return c.contribution_id===newItem.contribution_id?Object.assign({},c,{contribution_id:res.data.contribution_id}):c;});}
+          if(saveSC){google.script.run.withSuccessHandler(function(){toast('Saved to library!','info');}).withFailureHandler(function(){}).saveHotzoneCategory({sessionToken:tok(),section:section,title:title.trim(),body:body.trim(),link_url:linkUrl.trim(),link_title:linkTitle.trim(),image_url:imgUrl||'',image_file_id:fileId||''});}
+          toast('Saved!','success');
+        })
+        .withFailureHandler(function(e){S._saving=false;var sb=byId('hz2CSave');if(sb)sb.classList.remove('hz2-btn-saving');S.contributions[section]=prevItems;if(S.currentEdition&&S._contribCache[S.currentEdition.edition_id])S._contribCache[S.currentEdition.edition_id].contributions=S.contributions;toast(e&&e.message?e.message:'Save failed.','error');renderView_();})
+        .saveHotzoneContribution({sessionToken:tok(),edition_id:S.currentEdition&&S.currentEdition.edition_id,section:section,title:title.trim(),body:body.trim(),link_url:linkUrl.trim(),link_title:linkTitle.trim(),contribution_id:editing?editing.contribution_id:'',image_url:imgUrl||(editing&&editing.image_url)||'',image_file_id:fileId||'',save_as_template:saveTpl?'1':''});
+    }
+    if(S.pendingImage){google.script.run.withSuccessHandler(function(res){if(res&&res.success&&res.data)doSave(res.data.image_url,res.data.file_id);else{S._saving=false;doSave('','');}}).withFailureHandler(function(){S._saving=false;doSave('','');}).uploadHotzoneImage({sessionToken:tok(),base64:S.pendingImage.base64,fileName:S.pendingImage.fileName,mimeType:S.pendingImage.mimeType});}
+    else doSave('','');
+  }
+
+  function delContrib_(cid){
+    var section=S.activeSection;if(!section)return;
+    var prev=JSON.parse(JSON.stringify(S.contributions[section]||[]));
+    S.contributions[section]=(S.contributions[section]||[]).map(function(c){return c.contribution_id===cid?Object.assign({},c,{_optimisticDeleted:true}):c;});
+    patchContribList_();
+    google.script.run
+      .withSuccessHandler(function(){S.contributions[section]=(S.contributions[section]||[]).filter(function(c){return c.contribution_id!==cid;});if(S.currentEdition&&S._contribCache[S.currentEdition.edition_id])S._contribCache[S.currentEdition.edition_id].contributions=S.contributions;patchContribList_();toast('Deleted.','info');})
+      .withFailureHandler(function(e){S.contributions[section]=prev;patchContribList_();toast(e&&e.message?e.message:'Delete failed.','error');})
+      .deleteHotzoneContribution({sessionToken:tok(),contribution_id:cid});
+  }
+
+  function updateEditionStatus_(status){
+    var bid=status==='SAVED'?'hz2SaveBtn':status==='PUBLISHED'?'hz2PublishBtn':'hz2ReopenBtn';
+    var btn=byId(bid);if(btn){btn.disabled=true;btn.textContent='...';}
+    var prevStatus=S.currentEdition&&S.currentEdition.status;
+    if(S.currentEdition){S.currentEdition.status=status;if(S._contribCache[S.currentEdition.edition_id])S._contribCache[S.currentEdition.edition_id].edition.status=status;}
+    renderView_();
+    google.script.run
+      .withSuccessHandler(function(res){if(btn)btn.disabled=false;if(!res||!res.success){if(S.currentEdition)S.currentEdition.status=prevStatus;toast((res&&res.error)||'Update failed.','error');renderView_();return;}S._editionCacheTs=0;toast(status==='PUBLISHED'?'Published!':status==='SAVED'?'Saved!':'Reopened.','success');})
+      .withFailureHandler(function(e){if(btn)btn.disabled=false;if(S.currentEdition)S.currentEdition.status=prevStatus;toast(e&&e.message?e.message:'Update failed.','error');renderView_();})
+      .updateHotzoneEditionStatus({sessionToken:tok(),edition_id:S.currentEdition.edition_id,status:status,webapp_url:encodeURIComponent(window.location.href.split('?')[0]+'?hzview='+S.currentEdition.edition_id)});
+  }
+
+  function loadCalendar_(cb){google.script.run.withSuccessHandler(function(res){if(res&&res.success)S.calendar=(res.data&&res.data.events)||[];if(typeof cb==='function')cb();else renderView_();}).withFailureHandler(function(){if(typeof cb==='function')cb();else renderView_();}).getHotzoneCalendarEvents({sessionToken:tok()});}
+
+  function saveCalEvent_(){
+    var date=(byId('hz2EvDate')||{}).value||'',title=(byId('hz2EvTitle')||{}).value||'';
+    var msg=(byId('hz2EvMsg')||{}).value||'',lUrl=(byId('hz2EvLinkUrl')||{}).value||'',lTitle=(byId('hz2EvLinkTitle')||{}).value||'';
+    if(!date){toast('Select a date.','error');return;}if(!title.trim()){toast('Add a title.','error');return;}
+    var btn=byId('hz2EvSave');if(btn){btn.disabled=true;btn.textContent='Saving...';}
+    google.script.run
+      .withSuccessHandler(function(res){if(btn){btn.disabled=false;btn.textContent='Save Event';}if(!res||!res.success){toast((res&&res.error)||'Save failed.','error');return;}toast('Event saved!','success');S.calForm=null;S._viewingEvent=null;loadCalendar_();})
+      .withFailureHandler(function(e){if(btn){btn.disabled=false;btn.textContent='Save Event';}toast(e&&e.message?e.message:'Save failed.','error');})
+      .saveHotzoneCalendarEvent({sessionToken:tok(),event_id:(S.calForm&&S.calForm.event_id)||'',event_date:date,title:title.trim(),message:msg.trim(),link_url:lUrl.trim(),link_title:lTitle.trim()});
+  }
+
+  function delCalEvent_(eventId){
+    var prev=JSON.parse(JSON.stringify(S.calendar));
+    S.calendar=S.calendar.filter(function(e){return e.event_id!==eventId;});
+    S.calForm=null;S._viewingEvent=null;renderView_();
+    google.script.run.withSuccessHandler(function(){toast('Deleted.','info');}).withFailureHandler(function(e){S.calendar=prev;toast(e&&e.message?e.message:'Delete failed.','error');renderView_();}).deleteHotzoneCalendarEvent({sessionToken:tok(),event_id:eventId});
+  }
+
+  function loadSavedCategories_(cb){google.script.run.withSuccessHandler(function(res){S.savedCategories=(res&&res.success&&res.data&&res.data.categories)||[];if(typeof cb==='function')cb();else renderView_();}).withFailureHandler(function(){if(typeof cb==='function')cb();else renderView_();}).getHotzoneCategories({sessionToken:tok()});}
+
+  function saveSCEdit_(){
+    var sc=S.scEditing;if(!sc)return;
+    var sec=(byId('hz2SCSec')||{}).value||sc.section,title=(byId('hz2SCTitle')||{}).value||'',body=(byId('hz2SCBody')||{}).value||'';
+    var lUrl=(byId('hz2SCLinkUrl')||{}).value||'',lTitle=(byId('hz2SCLinkTitle')||{}).value||'';
+    var prev=JSON.parse(JSON.stringify(S.savedCategories));
+    S.savedCategories=S.savedCategories.map(function(c){return c.category_id===sc.category_id?Object.assign({},c,{section:sec,title:title.trim(),body:body.trim(),link_url:lUrl.trim(),link_title:lTitle.trim()}):c;});
+    S.scEditing=null;renderView_();
+    google.script.run
+      .withSuccessHandler(function(res){if(!res||!res.success){S.savedCategories=prev;toast((res&&res.error)||'Save failed.','error');renderView_();return;}toast('Saved!','success');})
+      .withFailureHandler(function(e){S.savedCategories=prev;toast(e&&e.message?e.message:'Save failed.','error');renderView_();})
+      .saveHotzoneCategory({sessionToken:tok(),category_id:sc.category_id,section:sec,title:title.trim(),body:body.trim(),link_url:lUrl.trim(),link_title:lTitle.trim(),image_url:sc.image_url||'',image_file_id:sc.image_file_id||''});
+  }
+
+  function delSavedCategory_(cid){
+    var prev=JSON.parse(JSON.stringify(S.savedCategories));
+    S.savedCategories=S.savedCategories.filter(function(c){return c.category_id!==cid;});renderView_();
+    google.script.run.withSuccessHandler(function(){toast('Deleted.','info');}).withFailureHandler(function(e){S.savedCategories=prev;toast(e&&e.message?e.message:'Delete failed.','error');renderView_();}).deleteHotzoneCategory({sessionToken:tok(),category_id:cid});
+  }
+
+  window.openHotzoneManagement_ = function(){
+    injectCSS_();
+    Object.assign(S,{view:'list',editions:[],currentEdition:null,contributions:{},activeSection:null,editingContrib:null,pendingImage:null,loading:true,calForm:null,_viewingEvent:null,calendar:[],emailDialog:null,confirmModal:null,savedCategories:[],scEditing:null,scFilter:'',scSelected:{},_page:0,_selectedEditions:{},_editionCacheTs:0,_contribCache:{},_saving:false});
+    _browseSCOpen=false;
+    if(typeof portalShowLoadingV414==='function')portalShowLoadingV414('Loading Hot Zone...',30);
+    mountShell_();setTimeout(function(){renderView_();loadEditions_(true);},20);
+  };
+
+  window.openHotzoneViewer_ = function(){
+    injectCSS_();
+    Object.assign(S,{view:'viewonly',viewonlyTab:'newspaper',loading:true,calForm:null,_viewingEvent:null,emailDialog:null,confirmModal:null});
+    if(typeof portalShowLoadingV414==='function')portalShowLoadingV414('Loading Hot Zone...',30);
+    mountShell_();
+    setTimeout(function(){
+      google.script.run
+        .withSuccessHandler(function(res){S.loading=false;if(typeof portalHideLoadingV414==='function')portalHideLoadingV414();if(res&&res.success&&res.data){S.currentEdition=res.data.edition||null;S.contributions=res.data.contributions||{};}loadCalendar_(function(){renderView_();});})
+        .withFailureHandler(function(){S.loading=false;if(typeof portalHideLoadingV414==='function')portalHideLoadingV414();renderView_();})
+        .getHotzoneLatestPublished({sessionToken:tok()});
+    },20);
+  };
+
+})();
+</script>

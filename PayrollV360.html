@@ -1,0 +1,3264 @@
+<script>
+// PAYROLL MODULE V360 — Full rewrite
+(function payrollModuleV360_() {
+
+  var S = window.payrollStateV360 = window.payrollStateV360 || {
+    mode: 'submission',
+    subTab: 'FORM',
+    reviewTab: 'INBOX',
+    step: 0,
+    data: null,
+    reviewData: null,
+    adminData: null,
+    roeData: null,
+    dashData: null,
+    currentDraft: null,
+    openId: '',        // expanded view card
+    editId: '',        // inline-editing card (review)
+    selectedIds: {},   // bulk approve checkboxes
+    answers: {},
+    filters: { restaurant: 'ALL', status: 'ALL', search: '', dateMode: '7d', dateFrom: '', dateTo: '' },
+    roePoolPage: 0,    // current page for ROE pool table
+    reviewPage: 0,     // current page for review list
+    dashDateMode: '7d',// date filter for MRO dashboard
+    busy: false
+  };
+
+  var SECTIONS = {
+    attendanceBonusRows:  { title:'Attendance Bonus',                   addText:'Add Employee', columns:[{key:'employeeId',label:'Employee',type:'employee'},{key:'attendancePercentage',label:'Attendance %',type:'number'}] },
+    newHireRows:          { title:'New Hire / Returned From Leave',      addText:'Add Employee', columns:[{key:'employeeId',label:'Employee',type:'employee'},{key:'type',label:'Type',type:'select',options:['New Hire','Returned From Leave']},{key:'startDate',label:'Start Date',type:'date'}] },
+    roeRows:              { title:'ROE Applications', addText:'Attach ROE', columns:[{key:'roeApplicationId',label:'ROE Application',type:'roeApplication'},{key:'employeeName',label:'Employee',type:'readonly'},{key:'terminationDate',label:'Last Day',type:'readonly'},{key:'reasonForSeparation',label:'Reason',type:'readonly'}] },
+    missingTrainingRows:  { title:'Missing / Training Hours',            addText:'Add Employee', columns:[{key:'employeeId',label:'Employee',type:'employee'},{key:'missingHours',label:'Missing Hrs',type:'number'},{key:'trainingHours',label:'Training Hrs',type:'number'},{key:'reason',label:'Reason',type:'text'}] },
+    uniformDeductionRows: { title:'Uniform Deduction (Extra Uniforms)',  addText:'Add Employee', columns:[{key:'employeeId',label:'Employee',type:'employee'},{key:'item',label:'Item',type:'text'},{key:'amount',label:'Amount ($)',type:'number'},{key:'reason',label:'Reason',type:'text'}] }
+  };
+  var SECTION_ORDER = ['attendanceBonusRows','newHireRows','roeRows','missingTrainingRows','uniformDeductionRows'];
+  var STEPS = ['START','DETAILS'].concat(SECTION_ORDER).concat(['NOTES','REVIEW']);
+
+  // ── Utils ─────────────────────────────────────────────────────────────
+  function $(id){ return document.getElementById(id); }
+  function qsa(sel,root){ return Array.prototype.slice.call((root||document).querySelectorAll(sel)); }
+  function cl(v){ return String(v==null?'':v).trim(); }
+  function esc(v){ return cl(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+  function up(v){ return cl(v).toUpperCase(); }
+  function token_(){ try{if(typeof getSessionToken_==='function')return getSessionToken_()||'';}catch(e){} try{return sessionStorage.getItem('portalSessionToken')||'';}catch(e){} return ''; }
+  function toast_(msg,type){
+    type=type||'info';
+    var host=$('payrollPageV360')||document.body;
+    var box=$('p60InlineToast');
+    if(!box){
+      box=document.createElement('div');
+      box.id='p60InlineToast';
+      box.setAttribute('role','status');
+      box.style.cssText='position:fixed;right:24px;bottom:24px;z-index:99999;max-width:420px;padding:12px 16px;border-radius:10px;box-shadow:0 12px 30px rgba(0,0,0,.18);font-weight:700;background:#eef6ff;color:#16456b;border:1px solid #bcd7ef;display:none';
+      host.appendChild(box);
+    }
+    var colors={success:['#e9f8ed','#17622a','#bce7c5'],error:['#fff0f0','#9b1c1c','#f3b4b4'],info:['#eef6ff','#16456b','#bcd7ef'],warning:['#fff8e6','#7a5200','#f5dba0']};
+    var c=colors[type]||colors.info;
+    box.style.background=c[0];box.style.color=c[1];box.style.borderColor=c[2];
+    box.textContent=msg||'';box.style.display='block';
+    clearTimeout(box._timer);
+    box._timer=setTimeout(function(){box.style.display='none';},3600);
+  }
+  function todayISO_(){ return new Date().toISOString().slice(0,10); }
+  // Normalize any date value to YYYY-MM-DD for use in <input type="date"> value attrs.
+  // Handles: ISO strings with time, MM/DD/YYYY, spreadsheet serial numbers, plain YYYY-MM-DD.
+  function toDateInput_(v){
+    if(!v)return'';
+    var s=cl(String(v));
+    // Already YYYY-MM-DD
+    if(/^\d{4}-\d{2}-\d{2}$/.test(s))return s;
+    // ISO datetime — slice off time
+    if(/^\d{4}-\d{2}-\d{2}T/.test(s))return s.slice(0,10);
+    // Spreadsheet serial number (number of days since Dec 30 1899)
+    if(/^\d{4,6}$/.test(s)){
+      var epoch=new Date(1899,11,30);
+      epoch.setDate(epoch.getDate()+parseInt(s,10));
+      return epoch.toISOString().slice(0,10);
+    }
+    // Try JS Date parse for other formats (MM/DD/YYYY, "March 15 2025", etc.)
+    var d=new Date(s);
+    if(!isNaN(d.getTime()))return d.toISOString().slice(0,10);
+    return'';
+  }
+  function fmtDate_(v){ if(!v)return''; var d=new Date(v); return isNaN(d)?cl(v):d.toLocaleDateString(); }
+  // For date-only fields (pay_period_ending etc) — strips time before formatting
+  function fmtDateOnly_(v){
+    if(!v)return'';
+    // Normalize to YYYY-MM-DD first (strips any time/timezone)
+    var iso=toDateInput_(v);
+    if(iso){
+      // Parse as local date to avoid timezone shift
+      var parts=iso.split('-');
+      var d=new Date(Number(parts[0]),Number(parts[1])-1,Number(parts[2]));
+      return isNaN(d)?iso:d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+    }
+    var d=new Date(v);
+    return isNaN(d)?cl(v):d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  }
+  function fmtDateTime_(v){ if(!v)return''; var d=new Date(v); return isNaN(d)?cl(v):d.toLocaleDateString()+' '+d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}); }
+  function statusLabel_(s){ var v=up(s||'DRAFT'); var m={DRAFT:'Draft',SUBMITTED:'Submitted',VIEWED:'Viewed by MRO',IN_REVIEW:'In Review',CORRECTION_NEEDED:'Correction Needed',RESUBMITTED:'Resubmitted',APPROVED:'Approved',RECALLED:'Recalled',REJECTED:'Rejected'}; return m[v]||cl(s||'DRAFT').replace(/_/g,' '); }
+  function statusCls_(s){ return up(s||'DRAFT').replace(/[^A-Z0-9]+/g,'-'); }
+  function isEditable_(s,row){ var v=up(s||''); var locked=row&&up(row.locked_by_mro)==='YES'; if(locked)return false; return v==='DRAFT'||v==='SUBMITTED'||v==='CORRECTION_NEEDED'||v==='RECALLED'; }
+  function activeCorrectionNote_(row){ return up(row&&row.status)==='CORRECTION_NEEDED' ? cl(row.correction_notes||row.admin_notes||'') : ''; }
+  function approvalSummaryHtml_(row){ if(up(row&&row.status)!=='APPROVED')return''; return '<div class="p60-note-box p60-note-success" style="margin-top:10px"><b>Approved by MRO</b>'+(row.approved_at?' · '+esc(fmtDateTime_(row.approved_at)):'')+(Number(row.correction_count||0)>0?' · Corrections: '+esc(row.correction_count):'')+'</div>'; }
+  function canRecall_(s,row){ var v=up(s||''); var locked=row&&up(row.locked_by_mro)==='YES'; return !locked&&(v==='DRAFT'||v==='SUBMITTED'); }
+  function canReturnToRestaurant_(row){ return !!row && up(row.status)==='IN_REVIEW' && up(row.locked_by_mro)==='YES'; }
+  function isMRO_(){ try{ var r=up((window.state&&state.session&&state.session.roleCode)||''); return r==='MRO'||r==='HR_ADMIN'||r==='SUPER_ADMIN'||r==='SENIOR_MANAGEMENT'; }catch(e){return false;} }
+
+  // ── Page lifecycle ────────────────────────────────────────────────────
+  function hideMain_(){
+    var ds=document.querySelector('.dashboard-stage');
+    if(ds){ds.hidden=false;ds.style.display='';}
+    ['dashboard-grid','.newsletter','.right-column','.login-stage'].forEach(function(s){
+      var el=s.startsWith('.')?document.querySelector(s):$(s)||document.querySelector('.'+s);
+      if(el)el.style.display='none';
+    });
+    var aw=$('adminWorkspace');if(aw)aw.hidden=true;
+    ['payrollModulePageV340','payrollModulePageV342','payrollModulePageV350'].forEach(function(id){var e=$(id);if(e){e.hidden=true;e.style.display='none';}});
+  }
+  function cleanupUI_(){
+    S.busy=false;
+    var pg=$('payrollPageV360');
+    if(pg){pg.hidden=true;pg.style.display='none';var c=$('payrollContentV360');if(c)c.innerHTML='';}
+    document.body.classList.remove('payroll-open');
+    document.body.style.overflow='';
+  }
+  function ensurePage_(){
+    var pg=$('payrollPageV360');
+    if(pg)return pg;
+    pg=document.createElement('section');
+    pg.id='payrollPageV360'; pg.hidden=true;
+    pg.innerHTML='<div id="payrollContentV360"></div>';
+    (document.querySelector('.dashboard-stage')||document.querySelector('.app-shell')||document.body).appendChild(pg);
+    injectStyles_();
+    return pg;
+  }
+  function showPage_(){ hideMain_(); var pg=ensurePage_(); pg.hidden=false;pg.style.display='block';pg.style.pointerEvents='auto'; document.body.classList.add('payroll-open'); window.scrollTo({top:0,behavior:'smooth'}); }
+  function setContent_(html){ var c=$('payrollContentV360');if(c)c.innerHTML=html; }
+  function backToDash_(){
+    cleanupUI_();
+    try{if(typeof goBackToDashboardHome==='function'){goBackToDashboardHome();return;}}catch(e){}
+    try{if(typeof restoreDashboardHomeLayout_==='function'){restoreDashboardHomeLayout_();return;}}catch(e){}
+    ['dashboard-grid','.center-column','.newsletter','.right-column'].forEach(function(s){var el=s.startsWith('.')?document.querySelector(s):$(s)||document.querySelector('.'+s);if(el)el.style.display='';});
+    var aw=$('adminWorkspace');if(aw)aw.hidden=true;
+    try{if(window.state)state.currentActionKey='';}catch(e){}
+    window.scrollTo({top:0,behavior:'smooth'});
+  }
+
+  // ── Data helpers ──────────────────────────────────────────────────────
+  function normRn_(v){ return cl(v).replace(/[^0-9A-Za-z]/g,'').toUpperCase(); }
+  function restaurantKeyMap_(){
+    var map={};
+    function add(arr){(arr||[]).forEach(function(r){
+      var rn=cl(r.restaurant_number||r.restaurantNumber||r.restaurant_code||r.restaurantCode||r.number||r.code||'');
+      var id=cl(r.restaurant_id||r.restaurantId||r.id||'');
+      if(rn){map[normRn_(rn)]=rn;}
+      if(id&&rn){map[normRn_(id)]=rn;}
+    });}
+    try{add(S.data&&S.data.restaurants);}catch(e){}
+    try{add(S.reviewData&&S.reviewData.restaurants);}catch(e2){}
+    try{add(S.adminData&&S.adminData.restaurants);}catch(e3){}
+    try{add(window.state&&state.adminTools&&state.adminTools.restaurants);}catch(e4){}
+    return map;
+  }
+  function normalizeRestaurantKey_(value){
+    value=cl(value);
+    if(!value)return '';
+    var map=restaurantKeyMap_();
+    return map[normRn_(value)]||value;
+  }
+  function employeeRestaurants_(r){
+    var raw=[
+      r.restaurant_number,
+      r.restaurantNumber,
+      r.restaurant_code,
+      r.restaurantCode,
+      r.assigned_restaurant,
+      r.assignedRestaurant,
+      r.assigned_restaurant_number,
+      r.assignedRestaurantNumber,
+      r.restaurant_id,
+      r.restaurantId,
+      r.restaurantNumbers,
+      r.restaurant_numbers
+    ];
+    var out=[];
+    raw.forEach(function(x){
+      cl(x).split(',').forEach(function(part){
+        var mapped=normalizeRestaurantKey_(part);
+        if(mapped && out.indexOf(mapped)===-1)out.push(mapped);
+      });
+    });
+    return out;
+  }
+  function employeeMatchesRestaurant_(emp,rn){
+    var target=normRn_(rn);
+    if(!target) return true;
+    return (emp.restaurantKeys||[]).some(function(x){ return normRn_(x)===target; });
+  }
+  function allEmployees_(){
+    var list=[],seen={};
+    function add(arr){(arr||[]).forEach(function(r){
+      var name=cl(r.full_name||r.name||r.team_member_name||r.employee_name||((r.first_name||'')+' '+(r.last_name||'')).trim());
+      var id=cl(r.employee_id||r.team_member_id||r.teamMemberId||r.id||name);
+      if(!id||seen[id])return; seen[id]=true;
+      var st=up(r.status||r.employee_status||'ACTIVE');
+      if(['INACTIVE','ARCHIVED','QUIT','DID NOT SHOW UP','DIDNT SHOW UP','TERMINATED','DEACTIVATED'].indexOf(st)!==-1)return;
+      var keys=employeeRestaurants_(r);
+      list.push({
+        id:id,
+        name:name||id,
+        rn:keys[0]||'',
+        restaurantKeys:keys,
+        first:cl(r.first_name||r.firstName||''),
+        last:cl(r.last_name||r.lastName||'')
+      });
+    });}
+    add(S.data&&S.data.employees); add(S.reviewData&&S.reviewData.employees);
+    try{add(window.state&&state.adminTools&&(state.adminTools.teamMembers||state.adminTools.employees));}catch(e){}
+    return list.sort(function(a,b){return a.name.localeCompare(b.name);});
+  }
+  function empOptions_(selected,rn){
+    var all=allEmployees_();
+    var list=rn ? all.filter(function(e){return employeeMatchesRestaurant_(e,rn);}) : all;
+    var html='<option value="">Select employee</option>';
+    if(rn && !list.length){
+      return html+'<option value="" disabled>No active employees found for selected restaurant</option>';
+    }
+    list.forEach(function(e){ var sel=(cl(selected)===e.id||cl(selected)===e.name)?' selected':''; html+='<option value="'+esc(e.id)+'" data-name="'+esc(e.name)+'" data-first="'+esc(e.first)+'" data-last="'+esc(e.last)+'"'+sel+'>'+esc(e.name)+'</option>'; });
+    return html;
+  }
+  function rnOptions_(selected,includeAll){
+    var list=[],seen={};
+    function add(arr){(arr||[]).forEach(function(r){var n=cl(r.restaurant_number||r.restaurantNumber||r.restaurant_code||'');if(n&&!seen[n]){seen[n]=true;list.push({n:n,label:n+(r.restaurant_name||r.name?' – '+(r.restaurant_name||r.name):'')}); }});}
+    add(S.data&&S.data.restaurants); add(S.reviewData&&S.reviewData.restaurants);
+    try{add(window.state&&state.adminTools&&state.adminTools.restaurants);}catch(e){}
+    if(!list.length) add(((S.data&&S.data.submissions)||[]).concat((S.reviewData&&S.reviewData.submissions)||[]));
+    list.sort(function(a,b){return a.n.localeCompare(b.n);});
+    var html=includeAll?'<option value="ALL">All Restaurants</option>':'<option value="">Select restaurant…</option>';
+    list.forEach(function(r){html+='<option value="'+esc(r.n)+'"'+(cl(selected)===r.n?' selected':'')+'>'+esc(r.label)+'</option>';});
+    return html;
+  }
+
+  // ── Draft helpers ─────────────────────────────────────────────────────
+  function defaultDraft_(){
+    var rn='';try{rn=cl((S.data&&S.data.restaurantNumber)||(window.state&&state.session&&(state.session.restaurantNumber||state.session.restaurantId))||'');}catch(e){}
+    return {restaurantNumber:rn,payPeriodEnding:todayISO_(),timeCardUpdated:'Yes',statHours:'',specialNotes:'',attendanceBonusRows:[],newHireRows:[],roeRows:[],missingTrainingRows:[],uniformDeductionRows:[]};
+  }
+  function draft_(){ S.currentDraft=S.currentDraft||defaultDraft_(); return S.currentDraft; }
+  function readScreen_(){
+    var d=draft_();
+    var m={restaurant:'payrollRnV360',period:'payrollPeriodV360',timeCard:'payrollTimeCardV360',stat:'payrollStatV360',notes:'payrollNotesV360'};
+    Object.keys(m).forEach(function(k){var el=$(m[k]);if(el){if(k==='restaurant')d.restaurantNumber=el.value;else if(k==='period')d.payPeriodEnding=el.value;else if(k==='timeCard')d.timeCardUpdated=el.value;else if(k==='stat')d.statHours=el.value;else if(k==='notes')d.specialNotes=el.value;}});
+    SECTION_ORDER.forEach(function(key){if($('payrollTable_'+key))d[key]=collectRows_(key);if(S.answers[key]==='SKIP')d[key]=[];});
+  }
+  function collectRows_(key){
+    var rows=[];var tbl=$('payrollTable_'+key);if(!tbl)return rows;
+    qsa('tbody tr',tbl).forEach(function(tr){
+      var obj={};qsa('[data-field]',tr).forEach(function(inp){
+        var f=inp.getAttribute('data-field');obj[f]=inp.value;
+        if(f==='employeeId'){var o=inp.options[inp.selectedIndex];obj.employeeName=o?(o.getAttribute('data-name')||o.textContent):'';obj.firstName=o?o.getAttribute('data-first'):'';obj.lastName=o?o.getAttribute('data-last'):'';}
+      });
+      if(rowHasMeaningfulInputForSectionV22_(key,obj)) rows.push(obj);
+    });
+    return rows;
+  }
+
+  // V22: Do not save empty/default section rows.
+  // This stops blank New Hire rows from showing only Type = New Hire later.
+  function rowHasMeaningfulInputForSectionV22_(key,row){
+    row=row||{};
+    function real(v){
+      var x=cl(v);
+      if(!x)return false;
+      if(/^select employee$/i.test(x))return false;
+      if(/^select$/i.test(x))return false;
+      if(x==='—')return false;
+      return true;
+    }
+    if(key==='attendanceBonusRows') return real(row.employeeId)||real(row.employeeName)||real(row.attendancePercentage);
+    if(key==='newHireRows') return real(row.employeeId)||real(row.employeeName)||real(row.startDate);
+    if(key==='roeRows') return real(row.roeApplicationId)||real(row.employeeName)||real(row.terminationDate)||real(row.reasonForSeparation);
+    if(key==='missingTrainingRows') return real(row.employeeId)||real(row.employeeName)||real(row.missingHours)||real(row.trainingHours)||real(row.reason);
+    if(key==='uniformDeductionRows') return real(row.employeeId)||real(row.employeeName)||real(row.item)||real(row.amount)||real(row.reason);
+    return Object.keys(row).some(function(k){return real(row[k]);});
+  }
+
+  function buildPayload_(){
+    readScreen_();var d=draft_();
+    return {sessionToken:token_(),submissionId:d.submissionId||'',restaurantNumber:d.restaurantNumber||'',payPeriodEnding:d.payPeriodEnding||'',timeCardUpdated:d.timeCardUpdated||'',statHours:d.statHours||'',payrollApproval:'',specialNotes:d.specialNotes||'',attendanceBonusRows:d.attendanceBonusRows||[],newHireRows:d.newHireRows||[],roeRows:d.roeRows||[],missingTrainingRows:d.missingTrainingRows||[],uniformDeductionRows:d.uniformDeductionRows||[]};
+  }
+  function validatePayload_(p){ if(!p.restaurantNumber)return'Please select a restaurant.'; if(!p.payPeriodEnding)return'Please enter the week ending date.'; if(!p.timeCardUpdated)return'Please confirm time card status.'; return''; }
+  function rowFromSubmission_(row){
+    var p={};try{p=JSON.parse(row.payload_json||'{}');}catch(e){}
+    return {submissionId:row.submission_id||'',restaurantNumber:row.restaurant_number||'',payPeriodEnding:toDateInput_(row.pay_period_ending)||todayISO_(),timeCardUpdated:row.time_card_updated||'Yes',statHours:row.stat_hours_1_0||'',specialNotes:row.special_notes||'',status:row.status||'DRAFT',attendanceBonusRows:p.attendanceBonusRows||[],newHireRows:p.newHireRows||[],roeRows:p.roeRows||[],missingTrainingRows:p.missingTrainingRows||[],uniformDeductionRows:p.uniformDeductionRows||[]};
+  }
+  function findRow_(id,admin){
+    var list=admin?(S.reviewData&&S.reviewData.submissions||[]):(S.data&&S.data.submissions||[]);
+    return list.find(function(r){return String(r.submission_id||r.submissionId||'')===String(id);})||null;
+  }
+
+  // ── Button level cache helpers ───────────────────────────────────────
+  var PAYROLL_BUTTON_CACHE_MS = 60000;
+
+  function buttonCache_(){
+    S.buttonCache = S.buttonCache || {};
+    return S.buttonCache;
+  }
+
+  function isFreshCache_(item){
+    return !!(item && item.data && (Date.now() - (item.loadedAt || 0) < PAYROLL_BUTTON_CACHE_MS));
+  }
+
+  function getButtonCache_(key){
+    var item = buttonCache_()[key];
+    return isFreshCache_(item) ? item.data : null;
+  }
+
+  function setButtonCache_(key,data){
+    if(!data)return;
+    buttonCache_()[key] = { data:data, loadedAt:Date.now() };
+  }
+
+  function clearPayrollButtonCache_(area){
+    var c = buttonCache_();
+    if(!area || area==='ALL'){
+      S.buttonCache = {};
+      S.adminSummaryCache = {};
+      S.data = null;
+      S.reviewData = null;
+      S.adminData = null;
+      adminClearViewCache_ && adminClearViewCache_();
+      return;
+    }
+    if(area==='submission'){ delete c.submission; S.data=null; S.roeData=null; }
+    // V31 FIX: Do not wipe the live Payroll Review data while the page is open.
+    // After approving one payroll, renderReviewList_ still needs S.reviewData to show the remaining In Review items.
+    // We only remove the saved button cache so next full page open can reload fresh data.
+    if(area==='review'){ delete c.review; }
+    if(area==='admin'){
+      Object.keys(c).forEach(function(k){ if(k.indexOf('admin:')===0) delete c[k]; });
+      S.adminData=null;
+      S.adminSummaryCache = {};
+      adminClearViewCache_ && adminClearViewCache_();
+    }
+  }
+
+  function adminButtonCacheKey_(){
+    return 'admin:'+[S.adminTab||'BATCHES',S.adminBatchKey||'',S.adminPage||0,S.adminAuditPage||0,S.adminDateMode||'7d',S.adminBrand||'ALL',S.adminRestaurant||'ALL',S.adminSearch||''].join('|');
+  }
+
+  // ── Open pages ────────────────────────────────────────────────────────
+  function openSubmission_(){
+    S.mode='submission';
+    showPage_();
+
+    // V25: Payroll Submission tabs should feel instant.
+    // Use current or cached data first, then refresh in the background for My Submissions and Approved.
+    var cached = S.data || getButtonCache_('submission');
+    if(cached){
+      S.data = cached;
+      if(!S.currentDraft)S.currentDraft=defaultDraft_();
+      loadRoeData_(renderSubmission_);
+      if(['MINE','APPROVED'].indexOf(S.subTab || '') !== -1){
+        refreshSubmissionDataSilently_(false);
+      }
+      return;
+    }
+
+    setContent_('<div class="p60-head"><div class="p60-title"><h2>Payroll Submission</h2><p>Loading…</p></div></div><div class="p60-body"><div class="p60-empty">Loading…</div></div>');
+    google.script.run
+      .withSuccessHandler(function(res){
+        if(!res||!res.success){var msg=(res&&res.error)||'Could not load payroll.';toast_(msg,'error');setContent_('<div class="p60-head"><div class="p60-title"><h2>Payroll Submission</h2><p>Could not load.</p></div></div><div class="p60-body"><div class="p60-empty">'+esc(msg)+'</div></div>');return;}
+        S.data=res.data||{};
+        setButtonCache_('submission',S.data);
+        if(!S.currentDraft)S.currentDraft=defaultDraft_();
+        loadRoeData_(renderSubmission_);
+      })
+      .withFailureHandler(function(e){toast_(e&&e.message?e.message:'Could not load payroll.','error');})
+      .getPayrollSubmissionWorkspaceData(token_());
+  }
+
+  function refreshSubmissionDataSilently_(forceRender){
+    if(S.submissionRefreshBusy)return;
+    S.submissionRefreshBusy=true;
+    google.script.run
+      .withSuccessHandler(function(res){
+        S.submissionRefreshBusy=false;
+        if(!res||!res.success)return;
+        S.data=res.data||{};
+        setButtonCache_('submission',S.data);
+        if(forceRender || S.mode==='submission'){
+          if(['MINE','APPROVED'].indexOf(S.subTab || '') !== -1) renderSubmission_();
+        }
+      })
+      .withFailureHandler(function(){S.submissionRefreshBusy=false;})
+      .getPayrollSubmissionWorkspaceData(token_());
+  }
+  function openReview_(){
+    S.mode='review';S.editId='';showPage_();
+    var cached = getButtonCache_('review');
+    if(cached){
+      S.reviewData = cached;
+      renderReview_();
+      return;
+    }
+    setContent_('<div class="p60-head"><div class="p60-title"><h2>Payroll Review</h2><p>Loading…</p></div></div><div class="p60-body"><div class="p60-empty">Loading…</div></div>');
+    google.script.run
+      .withSuccessHandler(function(res){
+        if(!res||!res.success){var msg=(res&&res.error)||'Could not load review.';toast_(msg,'error');setContent_('<div class="p60-head"><div class="p60-title"><h2>Payroll Review</h2><p>Could not load.</p></div></div><div class="p60-body"><div class="p60-empty">'+esc(msg)+'</div></div>');return;}
+        S.reviewData=res.data||{};
+        setButtonCache_('review',S.reviewData);
+        renderReview_();
+      })
+      .withFailureHandler(function(e){toast_(e&&e.message?e.message:'Could not load review.','error');})
+      .getPayrollReviewWorkspaceData(token_());
+  }
+
+  function openPayrollAdmin_(){
+    S.mode='payroll-admin';
+    showPage_();
+    var cached = !S.adminForceRefresh ? getButtonCache_(adminButtonCacheKey_()) : null;
+    if(cached){
+      S.adminData = cached;
+      S.adminLoading=false;
+      renderPayrollAdmin_();
+      return;
+    }
+    if(!S.adminForceRefresh && typeof adminGetCachedView_==='function' && adminGetCachedView_()){
+      S.adminLoading=false;
+      adminUseCachedView_();
+      return;
+    }
+    S.adminLoading=true;
+    setContent_('<div class="p60-head"><div class="p60-title"><h2>Payroll Admin</h2><p>Loading payroll batches…</p></div></div><div class="p60-body"><div class="p60-empty">Loading…</div></div>');
+    adminRefreshView_(false);
+  }
+
+  function openMRODash_(dateMode, forceRefresh){
+    if(dateMode) S.dashDateMode=dateMode;
+    S.mode='mro-dashboard';showPage_();
+    setContent_('<div class="p60-head"><div class="p60-title"><h2>📊 Payroll Dashboard</h2><p>Loading…</p></div></div><div class="p60-body"><div class="p60-empty">Loading…</div></div>');
+    google.script.run
+      .withSuccessHandler(function(res){if(!res||!res.success){toast_((res&&res.error)||'Could not load dashboard.','error');return;} S.dashData=res.data||{};renderMRODash_();})
+      .withFailureHandler(function(e){toast_(e&&e.message?e.message:'Could not load dashboard.','error');})
+      .getMROPayrollDashboardData({sessionToken:token_(),dateMode:S.dashDateMode||'7d',forceRefresh:!!forceRefresh});
+  }
+
+  // ── SUBMISSION PAGE (restaurant user) ─────────────────────────────────
+  function renderSubmission_(){
+    var mro=isMRO_();
+    setContent_(
+      '<div class="p60-head"><div class="p60-title"><h2>Payroll Submission</h2><p>Submit and track your restaurant payroll.</p></div>'
+      +'<div class="p60-actions"><button class="p60-btn-light" id="p60Back">← Dashboard</button>'
+      +(mro?'<button class="p60-btn-outline" id="p60ToDash">📊 MRO Dashboard</button><button class="p60-btn-outline" id="p60ToReview">Review Queue</button>':'')
+      +'<button id="p60New">+ New Payroll</button></div></div>'
+      +'<div class="p60-tabs">'
+      +'<button class="p60-tab'+(S.subTab==='FORM'?' active':'')+'" data-ptab="FORM">Payroll Form</button>'
+      +'<button class="p60-tab'+(S.subTab==='MINE'?' active':'')+'" data-ptab="MINE">My Submissions</button>'
+      +'<button class="p60-tab'+(S.subTab==='ROE'?' active':'')+'" data-ptab="ROE">Apply ROE</button>'
+      +'<button class="p60-tab'+(S.subTab==='APPROVED'?' active':'')+'" data-ptab="APPROVED">Approved</button>'
+      +'</div><div class="p60-body" id="p60Body"></div>'
+    );
+    $('p60Back').onclick=backToDash_;
+    $('p60New').onclick=function(){S.currentDraft=defaultDraft_();S.step=0;S.answers={};S.subListPage=0;S.approvedPage=0;S.subTab='FORM';renderSubmission_();};
+    if($('p60ToDash'))$('p60ToDash').onclick=function(){openMRODash_();};
+    if($('p60ToReview'))$('p60ToReview').onclick=openReview_;
+    qsa('[data-ptab]').forEach(function(b){b.onclick=function(){
+      var tab=b.getAttribute('data-ptab');
+      if(tab==='ROE'){openApplyRoeTab_();return;}
+      if(tab==='MINE')S.subListPage=0;
+      if(tab==='APPROVED')S.approvedPage=0;
+      S.subTab=tab;
+      if(tab==='MINE'||tab==='APPROVED'){
+        renderSubmission_();
+        refreshSubmissionDataSilently_(true);
+        return;
+      }
+      renderSubmission_();
+    };});
+    if(S.subTab==='FORM') renderWizard_();
+    else if(S.subTab==='ROE') renderRoeApplyPage_();
+    else renderSubList_(S.subTab==='APPROVED');
+  }
+
+  // ── WIZARD ────────────────────────────────────────────────────────────
+  function renderWizard_(){
+    var body=$('p60Body');if(!body)return;
+    var stepKey=STEPS[S.step]||'START';
+    body.innerHTML='<div class="p60-card"><div class="p60-progress">'+progressHtml_()+'</div><div id="p60Slide" class="p60-card-body"></div></div>';
+    var slide=$('p60Slide');
+    if(stepKey==='START')slide.innerHTML=startHtml_();
+    else if(stepKey==='DETAILS')slide.innerHTML=detailsHtml_();
+    else if(stepKey==='NOTES')slide.innerHTML=notesHtml_();
+    else if(stepKey==='REVIEW')slide.innerHTML=reviewHtml_();
+    else slide.innerHTML=sectionHtml_(stepKey);
+    bindWizard_();
+  }
+  function progressHtml_(){ return STEPS.map(function(s,i){var cls=i===S.step?'active':i<S.step?'done':'';return'<span class="p60-dot '+cls+'">'+(i+1)+'</span>'+(i<STEPS.length-1?'<span class="p60-line"></span>':'');}).join(''); }
+  function navHtml_(isLast){ return '<div class="p60-nav"><div><button class="p60-btn-sm" id="p60Prev"'+(S.step===0?' disabled':'')+'>Back</button><button class="p60-btn-sm" id="p60Draft">Save Draft</button></div><div>'+(isLast?'<button class="p60-btn-primary" id="p60Submit">Submit Payroll</button>':'<button class="p60-btn-primary" id="p60Next">Next →</button>')+'</div></div>'; }
+  function startHtml_(){ return '<div class="p60-start"><div class="p60-start-icon">💼</div><h3>Ready to submit payroll?</h3><p>Step by step — you can save a draft at any point.</p><button class="p60-btn-primary" id="p60StartWizard">Start Payroll Submission</button></div>'; }
+  function detailsHtml_(){
+    var d=draft_();var mro=isMRO_();
+    return '<h3 class="p60-slide-title">Payroll Details</h3><div class="p60-grid4">'
+      +'<div class="p60-field"><label>Restaurant</label><select id="payrollRnV360">'+rnOptions_(d.restaurantNumber,false)+'</select></div>'
+      +'<div class="p60-field"><label>Week Ending Date</label><input id="payrollPeriodV360" type="date" value="'+esc(toDateInput_(d.payPeriodEnding)||todayISO_())+'"></div>'
+      +'<div class="p60-field"><label>Time Card Updated</label><select id="payrollTimeCardV360"><option'+(d.timeCardUpdated==='Yes'?' selected':'')+'>Yes</option><option'+(d.timeCardUpdated==='No'?' selected':'')+'>No</option></select></div>'
+      +'<div class="p60-field"><label>Stat Hours at 1.0</label><input id="payrollStatV360" type="text" value="'+esc(d.statHours||'')+'"></div>'
+      +(mro?'<div class="p60-field p60-span2" style="background:rgba(232,141,7,.08);border-radius:10px;padding:8px 12px;border:1px solid rgba(232,141,7,.2)"><label style="color:var(--orange,#e88d07)">⚡ Submitting on behalf of restaurant</label><p style="margin:4px 0 0;font-size:.84rem;color:rgba(29,36,48,.65)">Your name will be noted in the submission history.</p></div>':'')
+      +'</div>'+navHtml_(false);
+  }
+  function sectionHtml_(key){
+    var d=draft_();var cfg=SECTIONS[key];var ans=S.answers[key]||((d[key]||[]).length?'YES':'');
+    var html='<div class="p60-question-card"><div class="p60-step-pill">Step '+(S.step+1)+' of '+STEPS.length+'</div><h3>Any '+esc(cfg.title)+'?</h3><p>'+esc(cfg.title)+'</p><div class="p60-choice-row"><button class="p60-btn-primary" data-sec-ans="YES" data-sec-key="'+key+'">Yes – add entries</button><button class="p60-btn-sm" data-sec-ans="SKIP" data-sec-key="'+key+'">None this week</button></div></div>';
+    if(ans==='YES') {
+      if(key==='roeRows' && !roePool_().length){
+        html+='<div class="p60-section-fields"><div class="p60-note-box p60-note-warning"><b>No ROE applications found for this restaurant.</b><br>Please submit an ROE application first, then come back to this payroll section.</div><button class="p60-btn-primary" id="p60ApplyRoeFromWizard" type="button">Apply ROE</button></div>'+navHtml_(false);
+      } else {
+        html+='<div class="p60-section-fields">'+rowTableHtml_(key,d[key]||[{}])+'</div>'+navHtml_(false);
+      }
+    }
+    else html+='<div class="p60-back-bar"><button class="p60-btn-sm" id="p60Prev">Back</button><button class="p60-btn-sm" id="p60Draft">Save Draft</button></div>';
+    return html;
+  }
+  function notesHtml_(){ var d=draft_(); return '<h3 class="p60-slide-title">Special Notes</h3><div class="p60-field"><label>Notes for MRO (optional)</label><textarea id="payrollNotesV360" rows="5" style="width:100%;box-sizing:border-box">'+esc(d.specialNotes||'')+'</textarea></div>'+navHtml_(false); }
+  function reviewHtml_(){ readScreen_();var p=buildPayload_(); return '<h3 class="p60-slide-title">Review Before Submit</h3><div class="p60-confirm">Please review your payroll before submitting. You can go back to correct anything.</div><table class="p60-read-table"><tbody><tr><th>Restaurant</th><td>'+esc(p.restaurantNumber)+'</td><th>Week Ending</th><td>'+esc(p.payPeriodEnding)+'</td></tr><tr><th>Time Card Updated</th><td>'+esc(p.timeCardUpdated)+'</td><th>Stat Hours</th><td>'+esc(p.statHours||'0')+'</td></tr></tbody></table>'+sectionSummaryHtml_(p)+navHtml_(true); }
+  function sectionSummaryHtml_(p){ var items=[['Attendance Bonus',p.attendanceBonusRows],['New Hire/Return',p.newHireRows],['ROE/Termination',p.roeRows],['Missing/Training Hrs',p.missingTrainingRows],['Uniform Deduction',p.uniformDeductionRows]]; var html='<div class="p60-grid4" style="margin:14px 0">'; items.forEach(function(x){html+='<div class="p60-note-box"><b>'+esc(x[0])+'</b><br>'+((x[1]||[]).length?x[1].length+' entr'+(x[1].length===1?'y':'ies'):'None')+'</div>';}); return html+'</div><div class="p60-section-label">Special Notes</div><div class="p60-note-box">'+esc(p.specialNotes||'No notes')+'</div>'; }
+
+
+  // ── Apply ROE tab navigation (from wizard or tab click) ───────────────
+  function openApplyRoeTab_(){
+    S.mode='submission';
+    S.subTab='ROE';
+    showPage_();
+
+    function renderAfterRoe_(){
+      try{ renderSubmission_(); }
+      catch(e){
+        console.error('Apply ROE render failed',e);
+        setContent_('<div class="p60-head"><div class="p60-title"><h2>Apply ROE</h2><p>Could not open.</p></div></div><div class="p60-body"><div class="p60-empty">'+esc(e&&e.message?e.message:String(e))+'</div></div>');
+      }
+    }
+
+    if(!S.data){
+      setContent_('<div class="p60-head"><div class="p60-title"><h2>Apply ROE</h2><p>Loading payroll workspace…</p></div></div><div class="p60-body"><div class="p60-empty">Loading…</div></div>');
+      google.script.run
+        .withSuccessHandler(function(res){
+          if(!res||!res.success){
+            var msg=(res&&res.error)||'Could not load payroll workspace.';
+            toast_(msg,'error');
+            setContent_('<div class="p60-head"><div class="p60-title"><h2>Apply ROE</h2><p>Could not load.</p></div></div><div class="p60-body"><div class="p60-empty">'+esc(msg)+'</div></div>');
+            return;
+          }
+          S.data=res.data||{};
+          if(!S.currentDraft)S.currentDraft=defaultDraft_();
+          loadRoeData_(renderAfterRoe_);
+        })
+        .withFailureHandler(function(e){
+          var msg=e&&e.message?e.message:'Could not load payroll workspace.';
+          toast_(msg,'error');
+          setContent_('<div class="p60-head"><div class="p60-title"><h2>Apply ROE</h2><p>Could not load.</p></div></div><div class="p60-body"><div class="p60-empty">'+esc(msg)+'</div></div>');
+        })
+        .getPayrollSubmissionWorkspaceData(token_());
+      return;
+    }
+    loadRoeData_(renderAfterRoe_);
+  }
+
+  // ── Bind ROE application dropdowns (fill readonly fields on select) ───
+  function bindRoeApplicationSelects_(root){
+    qsa('select[data-field="roeApplicationId"]',root||document).forEach(function(sel){
+      sel.onchange=function(){ fillRoeRowFromSelect_(sel); readScreen_(); };
+      if(sel.value) fillRoeRowFromSelect_(sel);
+    });
+  }
+
+  function fillRoeRowFromSelect_(select){
+    if(!select)return;
+    var tr=select.closest('tr');if(!tr)return;
+    var id=select.value;
+    var r=roeById_(id)||{};
+    var opt=select.options[select.selectedIndex];
+    var name=roeEmployeeName_(r)||(opt?opt.getAttribute('data-name'):'')||'';
+    var last=cl(r.last_day_of_work||r.lastDayOfWork||r.terminationDate||(opt?opt.getAttribute('data-last'):'')||'');
+    var reason=cl(r.reason_for_separation||r.reasonForSeparation||(opt?opt.getAttribute('data-reason'):'')||'');
+    var fields={employeeName:name,terminationDate:toDateInput_(last)||last,reasonForSeparation:reason};
+    Object.keys(fields).forEach(function(k){
+      var input=tr.querySelector('[data-field="'+k+'"]');
+      if(input)input.value=fields[k]||'';
+    });
+  }
+
+  function loadRoeData_(callback, forceRefresh){
+    var rn='';
+    try{ rn=(draft_&&draft_().restaurantNumber)||''; }catch(e){}
+    try{ if(!rn && S.data) rn=S.data.restaurantNumber||S.data.restaurant_number||''; }catch(e2){}
+    try{ if(!rn && window.state && state.session) rn=state.session.restaurantNumber||state.session.restaurant_number||state.session.restaurantId||''; }catch(e3){}
+
+    function done_(){
+      if(typeof callback==='function'){
+        try{ callback(); }catch(cbErr){ console.error('Payroll ROE callback failed', cbErr); }
+      }
+    }
+
+    // Use cached ROE data if available and not forcing refresh
+    if(!forceRefresh && S.roeData && (S.roeData.roes||S.roeData.pool)){
+      done_();
+      return;
+    }
+
+    if(!window.google || !google.script || !google.script.run){
+      S.roeData = S.roeData || { roes:[], pool:[] };
+      done_();
+      return;
+    }
+
+    google.script.run
+      .withSuccessHandler(function(res){
+        if(res && res.success){
+          S.roeData = res.data || { roes:[], pool:[] };
+        } else {
+          S.roeData = { roes:[], pool:[] };
+          console.warn((res&&res.error)||'ROE data could not load.');
+        }
+        done_();
+      })
+      .withFailureHandler(function(e){
+        S.roeData = { roes:[], pool:[] };
+        console.warn('getPayrollRoeApplicationData failed', e);
+        done_();
+      })
+      .getPayrollRoeApplicationData({sessionToken:token_(),restaurantNumber:rn});
+  }
+
+  function normalizeRoeStatus_(value){ return up(value||'ROE_SUBMITTED'); }
+  function roePool_(){
+    var d=draft_();
+    var rn=normalizeRestaurantKey_(d.restaurantNumber||'');
+    var data=S.roeData||{};
+    var rows=(data.pool&&data.pool.length?data.pool:data.roes)||[];
+    return rows.filter(function(r){
+      var rowRn=normalizeRestaurantKey_(r.restaurant_number||r.restaurantNumber||r.restaurant_id||r.restaurantId||'');
+      var same=!rn||!rowRn||normRn_(rowRn)===normRn_(rn);
+      var attached=cl(r.payroll_submission_id||r.payrollSubmissionId||r.attached_payroll_id||'');
+      var status=normalizeRoeStatus_(r.status);
+      var usable=['ROE_SUBMITTED','ROE_APPROVED','CORRECTION_NEEDED'].indexOf(status)!==-1;
+      return same && !attached && usable;
+    });
+  }
+  function roeById_(id){
+    id=cl(id);
+    if(!id)return null;
+    var data=S.roeData||{};
+    var rows=[].concat(data.pool||[],data.roes||[],data.roeApplications||[]);
+    for(var i=0;i<rows.length;i++){
+      var r=rows[i]||{};
+      if(cl(r.roe_id||r.roeId||r.submission_id||r.submissionId)===id)return r;
+    }
+    return null;
+  }
+  function roeEmployeeName_(r){
+    return cl(r&&(r.employee_name||r.employeeName||((r.first_name||r.firstName||'')+' '+(r.last_name||r.lastName||'')).trim()))||'';
+  }
+  function roeOptions_(selected){
+    var rows=roePool_();
+    var html='<option value="">Select ROE application</option>';
+    if(!rows.length)return html+'<option value="" disabled>No ROE applications found. Use Apply ROE first.</option>';
+    rows.forEach(function(r){
+      var id=cl(r.roe_id||r.roeId||r.submission_id||r.submissionId);
+      var name=roeEmployeeName_(r);
+      var reason=cl(r.reason_for_separation||r.reasonForSeparation||'');
+      var last=cl(r.last_day_of_work||r.lastDayOfWork||r.terminationDate||'');
+      var sel=cl(selected)===id?' selected':'';
+      html+='<option value="'+esc(id)+'" data-name="'+esc(name)+'" data-last="'+esc(last)+'" data-reason="'+esc(reason)+'"'+sel+'>'+esc(id+(name?' · '+name:'')+(reason?' · '+reason:''))+'</option>';
+    });
+    return html;
+  }
+
+  function badgeHtml_(status){
+    var s = up(status||'');
+    var map = {
+      'ROE_SUBMITTED':'Submitted','ROE_APPROVED':'Approved',
+      'CORRECTION_NEEDED':'Correction','COMPLETED':'Completed',
+      'DEACTIVATED':'Deactivated','DRAFT':'Draft'
+    };
+    var label = map[s] || cl(status||'Unknown').replace(/_/g,' ');
+    var cls = s==='ROE_APPROVED'?'APPROVED':s==='COMPLETED'?'APPROVED':s==='CORRECTION_NEEDED'?'CORRECTION-NEEDED':'SUBMITTED';
+    return '<span class="p60-status '+cls+'" style="font-size:.75rem">'+esc(label)+'</span>';
+  }
+
+  var ROE_PAGE_SIZE = 5;
+
+  function roePoolTableHtml_(roes){
+    var page = S.roePoolPage || 0;
+    var total = roes.length;
+    var totalPages = Math.max(1, Math.ceil(total / ROE_PAGE_SIZE));
+    page = Math.min(page, totalPages - 1);
+    S.roePoolPage = page;
+    var pageRoes = roes.slice(page * ROE_PAGE_SIZE, (page + 1) * ROE_PAGE_SIZE);
+
+    var html = '<div class="p60-section-label" style="display:flex;justify-content:space-between;align-items:center">'
+      + '<span>ROE Pool for this Restaurant</span>'
+      + (total > ROE_PAGE_SIZE
+          ? '<span style="font-size:.8rem;font-weight:700;color:#555">Showing '+(page*ROE_PAGE_SIZE+1)+'–'+Math.min((page+1)*ROE_PAGE_SIZE,total)+' of '+total+'</span>'
+          : '')
+      + '</div>';
+
+    if(!total){
+      return html + '<div class="p60-empty">No ROE applications yet.</div>';
+    }
+
+    html += '<table class="p60-read-table"><thead><tr>'
+      + '<th>ROE ID</th><th>Employee</th><th>Reason</th><th>Status</th><th>Payroll</th>'
+      + '</tr></thead><tbody>';
+    pageRoes.forEach(function(r){
+      html += '<tr data-roe-highlight="'+esc(r.roe_id||'')+'">'
+        + '<td>'+esc(r.roe_id)+'</td>'
+        + '<td>'+esc(r.employee_name)+'</td>'
+        + '<td>'+esc(r.reason_for_separation)+'</td>'
+        + '<td>'+badgeHtml_(r.status)+'</td>'
+        + '<td style="font-size:.78rem;color:#666;max-width:180px;word-break:break-all">'+esc(r.payroll_submission_id||'Not attached')+'</td>'
+        + '</tr>';
+    });
+    html += '</tbody></table>';
+
+    // Pagination controls
+    if(totalPages > 1){
+      html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;padding-top:8px;border-top:1px solid #e8e8e8">'
+        + '<button class="p60-btn-sm" id="roePoolPrev"'+(page===0?' disabled':'')+'>← Prev</button>'
+        + '<span style="font-size:.83rem;color:#555;font-weight:700">Page '+(page+1)+' of '+totalPages+'</span>'
+        + '<button class="p60-btn-sm" id="roePoolNext"'+(page>=totalPages-1?' disabled':'')+'>Next →</button>'
+        + '</div>';
+    }
+    return html;
+  }
+
+  function bindRoePoolPagination_(roes){
+    var prev = document.getElementById('roePoolPrev');
+    var next = document.getElementById('roePoolNext');
+    if(prev) prev.onclick = function(){
+      S.roePoolPage = Math.max(0, (S.roePoolPage||0) - 1);
+      var card = prev.closest('.p60-card-body');
+      if(card) card.innerHTML = roePoolTableHtml_(roes);
+      bindRoePoolPagination_(roes);
+    };
+    if(next) next.onclick = function(){
+      var total = roes.length;
+      var totalPages = Math.ceil(total / ROE_PAGE_SIZE);
+      S.roePoolPage = Math.min(totalPages - 1, (S.roePoolPage||0) + 1);
+      var card = next.closest('.p60-card-body');
+      if(card) card.innerHTML = roePoolTableHtml_(roes);
+      bindRoePoolPagination_(roes);
+    };
+  }
+
+  function renderRoeApplyPage_(){
+    if(!$('p60Body'))return;loadRoeData_(function(){var body=$('p60Body');if(!body)return;
+      var rn=(draft_()&&draft_().restaurantNumber)||(S.data&&S.data.restaurantNumber)||'';
+      var roes=(S.roeData&&S.roeData.roes)||[];
+      body.innerHTML='<div class="p60-card"><div class="p60-card-body"><h3 class="p60-slide-title">Apply ROE</h3><p class="p60-muted">Submit ROE first. During payroll, the ROE section will let you attach these applications.</p>'
+        +'<div class="p60-grid4">'
+        +'<div class="p60-field"><label>Restaurant</label><select id="roeRn">'+rnOptions_(rn,false)+'</select></div>'
+        +'<div class="p60-field"><label>Employee</label><select id="roeEmp">'+empOptions_('',rn)+'</select></div>'
+        +'<div class="p60-field"><label>Last Day of Work</label><input id="roeLastDay" type="date"></div>'
+        +'<div class="p60-field"><label>Reason for Separation</label><select id="roeReason"><option>Quit</option><option>Vacation</option><option>Sick leave</option><option>Terminated</option><option>Transferred to another restaurant</option><option>Under 3 month probation</option></select></div>'
+        +'<div class="p60-field"><label>Legal Status</label><select id="roeLegal"><option>Work permit</option><option>Study Permit</option><option>PR/Citizen</option></select></div>'
+        +'<div class="p60-field"><label>Health Benefits</label><select id="roeBenefits"><option>No</option><option>Yes</option></select></div>'
+        +'<div class="p60-field"><label>Station Champion</label><select id="roeChampion"><option>No</option><option>Yes</option></select></div>'
+        +'<div class="p60-field p60-span2"><label>If terminated or under 3 months probation, reason</label><input id="roeProbationReason" type="text"></div>'
+        +'</div><div class="p60-nav"><button class="p60-btn-primary" id="roeSubmitBtn">Submit ROE Application</button></div></div></div>'
+        +'<div class="p60-card" style="margin-top:12px"><div class="p60-card-body">'+roePoolTableHtml_(roes)+'</div></div>';
+      $('roeRn').onchange=function(){
+        S.currentDraft=S.currentDraft||defaultDraft_();
+        S.currentDraft.restaurantNumber=this.value;
+        var emp=$('roeEmp');
+        if(emp) emp.innerHTML=empOptions_('',this.value);
+        S.roeData=null; // force refresh for new restaurant
+        S.roePoolPage=0; // reset to first page on restaurant change
+        loadRoeData_(renderRoeApplyPage_,true);
+      };
+      bindRoePoolPagination_(roes);
+      $('roeSubmitBtn').onclick=function(){
+        var emp=$('roeEmp');
+        var opt=emp&&emp.options[emp.selectedIndex];
+        var empName=opt?(opt.getAttribute('data-name')||opt.text.replace(/^.*? · /,'')):'';
+        var p={
+          sessionToken:token_(),
+          restaurantNumber:$('roeRn').value,
+          employeeId:emp.value,
+          employeeName:empName,
+          lastDayOfWork:$('roeLastDay').value,
+          reasonForSeparation:$('roeReason').value,
+          legalStatus:$('roeLegal').value,
+          healthBenefits:$('roeBenefits').value,
+          stationChampion:$('roeChampion').value,
+          probationTerminationReason:$('roeProbationReason').value
+        };
+        if(!p.restaurantNumber){toast_('Select restaurant.','error');return;}
+        if(!p.employeeId){toast_('Select employee.','error');return;}
+        if(!p.lastDayOfWork){toast_('Enter the last day of work.','error');return;}
+
+        // ── Duplicate check — one active ROE per employee ─────────────────
+        var existingRoes=(S.roeData&&S.roeData.roes)||[];
+        var CLOSED=['COMPLETED','DEACTIVATED','REJECTED','CANCELLED'];
+        var duplicate=existingRoes.find(function(r){
+          var sameEmp=cl(r.employee_id||r.employeeId||'')===cl(p.employeeId)
+                   || cl(r.employee_name||r.employeeName||'').toLowerCase()===cl(empName).toLowerCase();
+          var active=CLOSED.indexOf(up(r.status||''))===-1;
+          return sameEmp && active;
+        });
+        if(duplicate){
+          toast_('An active ROE already exists for '+esc(empName)+' ('+esc(duplicate.roe_id||'')+'). Cannot submit a duplicate.','error');
+          // Highlight the existing ROE in the table
+          var existingRow=document.querySelector('[data-roe-highlight="'+duplicate.roe_id+'"]');
+          if(existingRow)existingRow.scrollIntoView({behavior:'smooth',block:'center'});
+          return;
+        }
+
+        google.script.run
+          .withSuccessHandler(function(res){
+            if(!res||!res.success){toast_((res&&res.error)||'Could not submit ROE.','error');return;}
+            clearPayrollButtonCache_('submission');
+            clearPayrollButtonCache_('admin');
+            toast_('ROE submitted. ID: '+(res.data&&res.data.roeId),'success');
+            S.roeData=null;S.roePoolPage=0;loadRoeData_(renderRoeApplyPage_,true);
+          })
+          .withFailureHandler(function(e){toast_(e&&e.message?e.message:'Could not submit ROE.','error');})
+          .submitPayrollRoeApplication(p);
+      };
+    });
+  }
+
+  // ── PAYROLL ADMIN PAGE ───────────────────────────────────────────────
+
+  var ADMIN_PAGE_SIZE = 8;
+
+  if(!S.adminTab || S.adminTab==='PAYROLLS') S.adminTab = 'BATCHES';
+  if(typeof S.adminPage!=='number') S.adminPage = 0;
+  if(typeof S.adminAuditPage!=='number') S.adminAuditPage = 0;
+  if(!S.adminDateMode) S.adminDateMode = '7d';
+  if(!S.adminSearch) S.adminSearch = '';
+  if(!S.adminRestaurant) S.adminRestaurant = 'ALL';
+  if(!S.adminBrand) S.adminBrand = 'ALL';
+
+  function adminRequestPayload_(){
+    return {
+      sessionToken: token_(),
+      tab: S.adminTab||'BATCHES',
+      batchKey: S.adminBatchKey||'',
+      page: (S.adminTab==='AUDIT' ? (S.adminAuditPage||0) : (S.adminPage||0)),
+      pageSize: ADMIN_PAGE_SIZE,
+      dateMode: S.adminDateMode||'7d',
+      brand: S.adminBrand||'ALL',
+      restaurant: S.adminRestaurant||'ALL',
+      search: S.adminSearch||'',
+      forceRefresh: !!S.adminForceRefresh
+    };
+  }
+
+  function adminLoadingHtml_(label){
+    var bars=['90%','70%','80%','60%','75%'];
+    var rows=bars.map(function(w){
+      return '<div style="height:13px;background:linear-gradient(90deg,#e8ecf0 25%,#f4f6f8 50%,#e8ecf0 75%);background-size:200% 100%;border-radius:2px;margin-bottom:10px;width:'+w+';animation:p60shimmer 1.4s infinite linear"></div>';
+    }).join('');
+    return '<style>@keyframes p60shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}</style>'
+      +'<div style="padding:16px">'
+      +'<div style="font-size:.82rem;font-weight:700;color:#0076b6;margin-bottom:12px">'+esc(label||'Loading…')+'</div>'
+      +'<div style="background:#fff;border:1px solid #d8d8d8;padding:14px;margin-bottom:10px">'+rows+'</div>'
+      +'<div style="background:#fff;border:1px solid #d8d8d8;padding:14px">'+rows+'</div>'
+      +'</div>';
+  }
+
+  function adminOpenExport_(data){
+    var url=(data&&((data.downloadUrl||data.fileUrl)))||'';
+    if(!url)return;
+    var a=document.createElement('a');
+    a.href=url;
+    a.target='_blank';
+    a.rel='noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  function adminScheduleRefresh_(){
+    clearTimeout(S.adminSearchTimer);
+    S.adminSearchTimer=setTimeout(function(){adminRefreshView_(false);},250);
+  }
+
+  function adminListCacheKey_(tab){
+    tab=tab||S.adminTab||'BATCHES';
+    return [tab,S.adminDateMode||'7d', S.adminBrand||'ALL', S.adminRestaurant||'ALL', S.adminSearch||''].join('|');
+  }
+
+  function adminViewCacheKeyFor_(tab,batchKey,page){
+    tab=tab||S.adminTab||'BATCHES';
+    batchKey=(batchKey!==undefined)?batchKey:(S.adminBatchKey||'');
+    if(page===undefined||page===null){
+      page=(tab==='AUDIT')?(S.adminAuditPage||0):(S.adminPage||0);
+    }
+    return [tab,batchKey,page,ADMIN_PAGE_SIZE,S.adminDateMode||'7d',S.adminBrand||'ALL',S.adminRestaurant||'ALL',S.adminSearch||''].join('|');
+  }
+
+  function adminViewCacheKey_(){
+    return adminViewCacheKeyFor_(S.adminTab||'BATCHES',S.adminBatchKey||'',undefined);
+  }
+
+  function adminGetCachedView_(){
+    var key=adminViewCacheKey_();
+    var cache=S.adminViewCache||{};
+    var item=cache[key];
+    if(!item||!item.data)return null;
+    // Keep tab cache for 5 minutes. Manual refresh will clear it earlier.
+    if(Date.now()-(item.loadedAt||0)>300000)return null;
+    return item.data;
+  }
+
+  function adminSetCachedViewFor_(tab,batchKey,page,data){
+    if(!data)return;
+    S.adminViewCache=S.adminViewCache||{};
+    S.adminViewCache[adminViewCacheKeyFor_(tab,batchKey,page)]={data:data,loadedAt:Date.now()};
+  }
+
+  function adminSetCachedView_(data){
+    adminSetCachedViewFor_(S.adminTab||'BATCHES',S.adminBatchKey||'',undefined,data);
+  }
+
+  function adminPrefetchAdminTabs_(){
+    if(S.mode!=='payroll-admin')return;
+    if(S.adminPrefetchingTabs)return;
+
+    var tabs=['BATCHES','APPROVED','ROE_PENDING','ROE_DONE','AUDIT'];
+    var missing=tabs.filter(function(tab){
+      var key=adminViewCacheKeyFor_(tab,'',0);
+      var item=(S.adminViewCache||{})[key];
+      return !(item&&item.data&&Date.now()-(item.loadedAt||0)<300000);
+    });
+    if(!missing.length)return;
+
+    S.adminPrefetchingTabs=true;
+    var left=missing.length;
+    missing.forEach(function(tab){
+      var payload={
+        sessionToken:token_(),
+        tab:tab,
+        batchKey:'',
+        page:0,
+        pageSize:ADMIN_PAGE_SIZE,
+        dateMode:S.adminDateMode||'7d',
+        brand:S.adminBrand||'ALL',
+        restaurant:S.adminRestaurant||'ALL',
+        search:S.adminSearch||'',
+        forceRefresh:false
+      };
+      google.script.run
+        .withSuccessHandler(function(res){
+          if(res&&res.success){
+            var data=res.data||{};
+            adminSetCachedViewFor_(tab,'',0,data);
+            if((tab==='BATCHES'||tab==='APPROVED') && (data.batches||[]).length){
+              S.adminListCacheMap=S.adminListCacheMap||{};
+              S.adminListCacheMap[adminListCacheKey_(tab)]={key:adminListCacheKey_(tab),data:data,loadedAt:Date.now()};
+            }
+          }
+          left--;
+          if(left<=0)S.adminPrefetchingTabs=false;
+        })
+        .withFailureHandler(function(){
+          left--;
+          if(left<=0)S.adminPrefetchingTabs=false;
+        })
+        .queryPayrollAdminWorkspaceData(payload);
+    });
+  }
+
+  // Backward compatibility with older calls already inside this file.
+  function adminPrefetchRoeTabs_(){
+    adminPrefetchAdminTabs_();
+  }
+
+  function adminClearViewCache_(){
+    S.adminViewCache={};
+    S.adminListCache=null;
+    S.adminListCacheMap={};
+  }
+
+  function adminUseCachedView_(){
+    var cached=adminGetCachedView_();
+    if(!cached)return false;
+    S.adminData=cached;
+    S.adminLoading=false;
+    renderPayrollAdmin_();
+    setTimeout(adminPrefetchRoeTabs_,60);
+    return true;
+  }
+
+  function adminCanUseCachedBatchList_(){
+    var key=adminListCacheKey_();
+    var cacheMap=S.adminListCacheMap||{};
+    if(cacheMap[key]&&cacheMap[key].data&&Array.isArray(cacheMap[key].data.batches))return true;
+    return !!(S.adminListCache && S.adminListCache.key===key && S.adminListCache.data && Array.isArray(S.adminListCache.data.batches));
+  }
+
+  function adminUseCachedBatchList_(){
+    var key=adminListCacheKey_(S.adminTab||'BATCHES');
+    if(!adminCanUseCachedBatchList_())return false;
+    var cacheMap=S.adminListCacheMap||{};
+    S.adminData=(cacheMap[key]&&cacheMap[key].data)||(S.adminListCache&&S.adminListCache.data)||{};
+    S.adminLoading=false;
+    renderPayrollAdmin_();
+    setTimeout(adminPrefetchRoeTabs_,60);
+    return true;
+  }
+
+  function adminRefreshView_(showLoading){
+    if(S.mode!=='payroll-admin')return;
+
+    var tab=S.adminTab||'BATCHES';
+    var isBatchList=(tab==='BATCHES'||tab==='APPROVED') && !S.adminBatchKey;
+
+    // Do not reload Payroll Admin on every tab click.
+    // Use browser cache unless this is a real manual refresh.
+    if(!S.adminForceRefresh){
+      if(adminUseCachedView_())return;
+      if(isBatchList && adminUseCachedBatchList_())return;
+    }
+
+    S.adminLoading=true;
+    if(showLoading){
+      renderPayrollAdmin_();
+    } else {
+      var body=$('p60AdminBody');
+      if(body){
+        var loadLabel='Loading payroll batches…';
+        if(tab==='APPROVED')loadLabel='Loading approved payrolls…';
+        if(tab==='ROE_PENDING')loadLabel='Loading pending ROEs…';
+        if(tab==='ROE_DONE')loadLabel='Loading completed ROEs…';
+        if(tab==='AUDIT')loadLabel='Loading audit history…';
+        body.innerHTML=adminLoadingHtml_(loadLabel);
+      }
+      else renderPayrollAdmin_();
+    }
+
+    google.script.run
+      .withSuccessHandler(function(res){
+        S.adminLoading=false;
+        S.adminForceRefresh=false;
+        if(!res||!res.success){toast_((res&&res.error)||'Could not load Payroll Admin.','error');return;}
+        S.adminData=res.data||{};
+        setButtonCache_(adminButtonCacheKey_(),S.adminData);
+        adminSetCachedView_(S.adminData);
+        if((S.adminData.batches||[]).length && !S.adminBatchKey){
+          S.adminListCacheMap=S.adminListCacheMap||{};
+          S.adminListCacheMap[adminListCacheKey_(S.adminTab||'BATCHES')]={key:adminListCacheKey_(S.adminTab||'BATCHES'),data:S.adminData,loadedAt:Date.now()};
+          S.adminListCache={key:adminListCacheKey_(S.adminTab||'BATCHES'),data:S.adminData,loadedAt:Date.now()};
+        }
+        if(S.adminBatchKey && S.adminData.viewMode==='batch_detail' && !S.adminData.batch){
+          S.adminBatchKey='';
+          adminRefreshView_(false);
+          return;
+        }
+        renderPayrollAdmin_();
+        setTimeout(adminPrefetchRoeTabs_,60);
+      })
+      .withFailureHandler(function(e){
+        S.adminLoading=false;
+        S.adminForceRefresh=false;
+        toast_(e&&e.message?e.message:'Could not load Payroll Admin.','error');
+      })
+      .queryPayrollAdminWorkspaceData(adminRequestPayload_());
+  }
+
+  function renderPayrollAdmin_(){
+    var d=S.adminData||{};
+    var restaurants=d.restaurants||[];
+    var brands=d.brands||[];
+    var summary=d.summary||{};
+    var counts=d.counts||{};
+    var tab=S.adminTab||'BATCHES';
+    var restaurant=S.adminRestaurant||'ALL';
+    var brand=S.adminBrand||'ALL';
+    var dateMode=S.adminDateMode||'7d';
+    var dmLabels={all:'All Time','7d':'Last 7 Days',month:'This Month',ytd:'Year to Date'};
+    var brandOpts='<option value="ALL">All Brands</option>'+brands.map(function(b){return'<option value="'+esc(b)+'"'+(brand===b?' selected':'')+'>'+esc(b)+'</option>';}).join('');
+    var rnOpts='<option value="ALL">All Restaurants</option>'+restaurants.map(function(r){var rn=cl(r.restaurant_number||'');return'<option value="'+esc(rn)+'"'+(restaurant===rn?' selected':'')+'>'+esc(rn)+'</option>';}).join('');
+    var active=function(t){return tab===t?' active':'';};
+
+    setContent_('<div class="p60-head"><div class="p60-title"><h2>Payroll Admin</h2><p>Weekly payroll batches, approved payrolls, and ROE tracking.</p></div><div class="p60-actions"><button class="p60-btn-light" id="p60ABack">← Dashboard</button><button class="p60-btn-outline" id="p60ARefresh">Refresh</button></div></div>'
+      +'<div class="p60-body">'
+      +'<div class="p60-kpi-row" style="grid-template-columns:repeat(4,1fr)">'
+      +'<div class="p60-kpi"><strong>'+esc(summary.totalRestaurants||0)+'</strong><span>Total Restaurants</span></div>'
+      +'<div class="p60-kpi p60-kpi-green"><strong>'+esc(summary.payrollsReceived||0)+'</strong><span>Payrolls Received</span></div>'
+      +'<div class="p60-kpi p60-kpi-red"><strong>'+esc(summary.pendingPayrolls||0)+'</strong><span>Pending Payrolls</span></div>'
+      +'<div class="p60-kpi p60-kpi-green"><strong>'+esc(summary.payrollWebsiteUpdated||0)+'</strong><span>Marked Done</span></div>'
+      +'</div>'
+      +'<div class="p60-admin-toolbar"><div><label>Date Range: </label><select id="p60AdminDateMode" class="p60-admin-filter"><option value="7d"'+(dateMode==='7d'?' selected':'')+'>Last 7 Days</option><option value="month"'+(dateMode==='month'?' selected':'')+'>This Month</option><option value="ytd"'+(dateMode==='ytd'?' selected':'')+'>Year to Date</option><option value="all"'+(dateMode==='all'?' selected':'')+'>All Time</option></select><span class="p60-muted" style="margin-left:10px">Showing: '+esc(dmLabels[dateMode]||dateMode)+'</span></div><button class="p60-btn-sm" id="p60AdminExport">⬇ Export CSV</button></div>'
+      +'<div class="p60-tabs">'
+      +'<button class="p60-tab'+active('BATCHES')+'" data-atab="BATCHES">Payroll Batches</button>'
+      +'<button class="p60-tab'+active('APPROVED')+'" data-atab="APPROVED">All Approved Payrolls</button>'
+      +'<button class="p60-tab'+active('ROE_PENDING')+'" data-atab="ROE_PENDING">Pending ROEs <span class="p60-mini-count">'+esc(counts.pendingRoes||0)+'</span></button>'
+      +'<button class="p60-tab'+active('ROE_DONE')+'" data-atab="ROE_DONE">Completed ROEs <span class="p60-mini-count">'+esc(counts.completedRoes||0)+'</span></button>'
+      +'<button class="p60-tab'+active('AUDIT')+'" data-atab="AUDIT">Audit History</button>'
+      +'</div>'
+      +'<div style="display:grid;grid-template-columns:180px 180px 1fr;gap:8px;margin:10px 0">'
+      +'<select id="p60ABrand" class="p60-admin-filter">'+brandOpts+'</select>'
+      +'<select id="p60ARn" class="p60-admin-filter">'+rnOpts+'</select>'
+      +'<input id="p60ASearch" class="p60-admin-filter" placeholder="Search restaurant, brand, week ending, MRO, employee" value="'+esc(S.adminSearch||'')+'">'
+      +'</div>'
+      +'<div id="p60AdminBody">'+(S.adminLoading?adminLoadingHtml_('Loading payroll admin data…'):'')+'</div>'
+      +'</div>');
+
+    $('p60ABack').onclick=backToDash_;
+    $('p60ARefresh').onclick=function(){adminClearViewCache_();S.adminForceRefresh=true;openPayrollAdmin_();};
+    var df=$('p60AdminDateMode'); if(df)df.onchange=function(){S.adminDateMode=df.value;S.adminBatchKey='';S.adminPage=0;S.adminAuditPage=0;adminClearViewCache_();adminRefreshView_(true);};
+    var ex=$('p60AdminExport'); if(ex)ex.onclick=adminExportCsv_;
+    var bf=$('p60ABrand'); if(bf)bf.onchange=function(){S.adminBrand=bf.value;S.adminBatchKey='';S.adminPage=0;S.adminAuditPage=0;adminClearViewCache_();adminRefreshView_(false);};
+    var rf=$('p60ARn'); if(rf)rf.onchange=function(){S.adminRestaurant=rf.value;S.adminBatchKey='';S.adminPage=0;S.adminAuditPage=0;adminClearViewCache_();adminRefreshView_(false);};
+    var sf=$('p60ASearch'); if(sf)sf.oninput=function(){S.adminSearch=sf.value;S.adminPage=0;S.adminAuditPage=0;adminClearViewCache_();adminScheduleRefresh_();};
+    qsa('[data-atab]').forEach(function(b){b.onclick=function(){
+      var nextTab=b.getAttribute('data-atab');
+      if(S.adminTab===nextTab && !S.adminBatchKey){
+        return;
+      }
+      S.adminTab=nextTab;
+      S.adminBatchKey='';
+      S.adminSelected={};
+      S.adminOpenPayrollId='';
+      S.adminOpenRoeId='';
+      S.adminPage=0;
+      S.adminAuditPage=0;
+      S.adminForceRefresh=false;
+      if(adminUseCachedView_())return;
+      if((nextTab==='BATCHES'||nextTab==='APPROVED') && adminUseCachedBatchList_())return;
+      adminRefreshView_(false);
+    };});
+
+    if(S.adminLoading)return;
+    if(tab==='BATCHES') adminRenderBatches_(d);
+    else if(tab==='APPROVED') adminRenderApproved_(d);
+    else if(tab==='ROE_PENDING') adminRenderRoes_(d.rows||[],true,d.total||0);
+    else if(tab==='ROE_DONE') adminRenderRoes_(d.rows||[],false,d.total||0);
+    else adminRenderAudit_(d.events||[],d.total||0);
+  }
+
+  function adminExportCsv_(){
+    if(S.busy)return;
+    S.busy=true;
+    toast_('Exporting…','info');
+    google.script.run
+      .withSuccessHandler(function(res){
+        S.busy=false;
+        if(!res||!res.success){toast_((res&&res.error)||'Export failed.','error');return;}
+        adminOpenExport_(res.data||{});
+        toast_((res.data&&res.data.message)||'Exported.','success');
+      })
+      .withFailureHandler(function(e){
+        S.busy=false;
+        toast_(e&&e.message?e.message:'Export failed.','error');
+      })
+      .exportPayrollAdminCsv(adminRequestPayload_());
+  }
+
+  function adminRenderBatches_(data){
+    var body=$('p60AdminBody'); if(!body)return;
+    if(data.viewMode==='batch_detail'){
+      adminRenderBatchDetail_(data.batch||null);
+      return;
+    }
+    var batches=data.batches||[];
+    if(!batches.length){body.innerHTML='<div class="p60-empty">No approved payroll batches found.</div>';return;}
+    var byBrand={};
+    batches.forEach(function(b){byBrand[b.brand]=byBrand[b.brand]||{done:0,total:0};byBrand[b.brand].done+=Number(b.updated||0);byBrand[b.brand].total+=Number(b.totalRestaurants||0);});
+    var brandCards='<div class="p60-admin-brand-cards">'+Object.keys(byBrand).sort().map(function(b){return'<div class="p60-admin-brand-card"><strong>'+esc(byBrand[b].done)+'/'+esc(byBrand[b].total)+'</strong><span>'+esc(b)+'</span></div>';}).join('')+'</div>';
+    var latest=data.latestBatches||[];
+    var latestWeek=data.latestWeek||'';
+    var otherBatches=data.otherBatches||[];
+    body.innerHTML=brandCards+'<div class="p60-card"><div class="p60-card-body">'
+      +'<div class="p60-admin-week-head"><div><h3>Week Ending: '+esc(fmtDateOnly_(latestWeek))+'</h3><p class="p60-muted">'+latest.reduce(function(n,b){return n+Number(b.received||0);},0)+' of '+latest.reduce(function(n,b){return n+Number(b.totalRestaurants||0);},0)+' restaurants submitted · Done: '+latest.reduce(function(n,b){return n+Number(b.updated||0);},0)+'</p></div>'+adminProgressHtml_(latest.reduce(function(n,b){return n+Number(b.updated||0);},0),latest.reduce(function(n,b){return n+Number(b.totalRestaurants||0);},0))+'</div>'
+      +'<table class="p60-read-table"><thead><tr><th>Brand</th><th>Restaurants</th><th>Received</th><th>Pending</th><th>Done</th><th>Progress</th><th>Status</th><th>Action</th></tr></thead><tbody>'
+      +latest.map(function(b){return'<tr><td><strong>'+esc(b.brand)+'</strong></td><td>'+esc(b.totalRestaurants)+'</td><td><strong style="color:#0076b6">'+esc(b.received)+'</strong></td><td><span class="p60-admin-pill-warn">'+esc(b.pending)+'</span></td><td>'+esc(b.updated)+' / '+esc(b.received)+'</td><td>'+adminProgressHtml_(b.updated,b.totalRestaurants)+'</td><td>'+batchStatusBadge_(b)+'</td><td><button class="p60-btn-sm" data-open-batch="'+esc(b.key)+'">Open →</button></td></tr>';}).join('')
+      +'</tbody></table>'
+      +(otherBatches.length?'<div class="p60-section-label" style="margin-top:14px">Other Week Ending Batches</div><table class="p60-read-table"><thead><tr><th>Week Ending</th><th>Brand</th><th>Received</th><th>Pending</th><th>Done</th><th>Status</th><th>Action</th></tr></thead><tbody>'+otherBatches.map(function(b){return'<tr><td><strong>'+esc(fmtDateOnly_(b.week))+'</strong></td><td>'+esc(b.brand)+'</td><td>'+esc(b.received)+'</td><td>'+esc(b.pending)+'</td><td>'+esc(b.updated)+' / '+esc(b.received)+'</td><td>'+batchStatusBadge_(b)+'</td><td><button class="p60-btn-sm" data-open-batch="'+esc(b.key)+'">Open →</button></td></tr>';}).join('')+'</tbody></table>':'')
+      +'</div></div>';
+    qsa('[data-open-batch]').forEach(function(btn){btn.onclick=function(){S.adminBatchKey=btn.getAttribute('data-open-batch');S.adminSelected={};S.adminOpenPayrollId='';adminRefreshView_(false);};});
+  }
+
+  function adminProgressHtml_(done,total){
+    total=Number(total||0);done=Number(done||0);var pct=total?Math.round((done/total)*100):0;
+    return '<div class="p60-admin-progress"><div><span style="width:'+pct+'%"></span></div><b>'+pct+'%</b></div>';
+  }
+
+  function batchStatusBadge_(b){
+    if(b.status==='COMPLETED')return'<span class="p60-status-badge APPROVED">Completed</span>';
+    if(b.status==='PARTIAL')return'<span class="p60-status-badge IN-REVIEW">Partially Updated</span>';
+    return'<span class="p60-status-badge CORRECTION-NEEDED">⚠ '+esc(b.pending)+' Pending</span>';
+  }
+
+
+  // V24: Admin expanded payroll summary cache and lazy tracking helpers.
+  // Keeps batch rows instant when opening and avoids building heavy history until user asks for it.
+  function adminSummaryCacheKey_(row){
+    row=row||{};
+    return [cl(row.submission_id||''), cl(row.updated_at||''), cl(row.status||''), cl(row.website_update_status||''), cl(row.admin_viewed_status||'')].join('|');
+  }
+
+  function adminGetPayrollSummaryHtml_(row){
+    S.adminSummaryCache=S.adminSummaryCache||{};
+    var key=adminSummaryCacheKey_(row);
+    if(S.adminSummaryCache[key])return S.adminSummaryCache[key];
+    var html=adminPayrollSummaryHtml_(row);
+    S.adminSummaryCache[key]=html;
+    return html;
+  }
+
+  function adminPrefetchPayrollSummaries_(rows){
+    rows=rows||[];
+    if(!rows.length)return;
+    clearTimeout(S.adminSummaryPrefetchTimer);
+    var i=0;
+    S.adminSummaryPrefetchTimer=setTimeout(function work(){
+      var started=Date.now();
+      while(i<rows.length && Date.now()-started<18){
+        adminGetPayrollSummaryHtml_(rows[i]);
+        i++;
+      }
+      if(i<rows.length)S.adminSummaryPrefetchTimer=setTimeout(work,40);
+    },120);
+  }
+
+  function adminLazyTrackingPlaceholder_(row){
+    var id=cl(row&&row.submission_id||'');
+    return '<div class="p60-section-label">Tracking Details</div>'
+      +'<div id="p60LazyTrack_'+esc(id)+'" class="p60-note-box" style="display:flex;justify-content:space-between;align-items:center;gap:10px">'
+      +'<span class="p60-muted">Tracking is loaded only when needed.</span>'
+      +'<button class="p60-btn-sm" data-load-payroll-tracking="'+esc(id)+'">Show Tracking</button>'
+      +'</div>';
+  }
+
+  function adminBindLazyTracking_(rows){
+    qsa('[data-load-payroll-tracking]').forEach(function(btn){
+      btn.onclick=function(event){
+        if(event)event.preventDefault();
+        var id=btn.getAttribute('data-load-payroll-tracking');
+        var row=(rows||[]).find(function(x){return cl(x.submission_id||'')===id;})||{};
+        var box=$('p60LazyTrack_'+id);
+        if(!box)return;
+        box.innerHTML='<span class="p60-muted">Loading tracking…</span>';
+        setTimeout(function(){ box.outerHTML=historyHtml_(row); },10);
+      };
+    });
+  }
+
+  function adminRenderBatchDetail_(batch){
+    var body=$('p60AdminBody'); if(!body)return;
+    if(!batch){body.innerHTML='<div class="p60-empty">This batch no longer matches the current filters.</div>';return;}
+    var rows=(batch.rows||[]).slice().sort(function(a,b){return String(a.restaurant_number).localeCompare(String(b.restaurant_number),undefined,{numeric:true});});
+    var html='<div class="p60-card"><div class="p60-card-body">'
+      +'<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap"><div><h3>'+esc(batch.brand)+' · Week Ending '+esc(fmtDateOnly_(batch.week))+'</h3><p class="p60-muted">Total restaurants '+esc(batch.totalRestaurants)+' · Received '+esc(batch.received)+' · Pending '+esc(batch.pending)+' · Done '+esc(batch.updated)+'</p></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="p60-btn-sm" id="p60BatchBack">← All Batches</button><button class="p60-btn-sm" id="p60SelectEligible">Select Pending</button><button class="p60-btn-primary" id="p60MarkDone">Mark Done</button></div></div>'
+      +'<div class="p60-table-wrap" style="margin-top:10px"><table class="p60-read-table"><thead><tr><th><input type="checkbox" id="p60SelectAllRows"></th><th>Restaurant</th><th>Submission ID</th><th>Approved By</th><th>Approved Date</th><th>Viewed</th><th>Done Status</th><th>ROEs</th><th>Actions</th></tr></thead><tbody>'
+      +rows.map(function(r){var id=cl(r.submission_id||''); var checked=S.adminSelected[id]?' checked':''; var isDone=payrollRowIsDone_(r); var approvedBy=approvedByFromPayroll_(r); var approvedAt=approvedAtFromPayroll_(r); var doneBtn=payrollRowCanMarkDone_(r)?'<button class="p60-btn-primary p60-done-btn" data-mark-one-website="'+esc(id)+'">Done</button>':''; return'<tr><td><input type="checkbox" data-admin-select="'+esc(id)+'"'+checked+' '+(isDone?'disabled':'')+'></td><td><strong>'+esc(r.restaurant_number||'—')+'</strong></td><td>'+esc(id||'—')+'</td><td>'+esc(approvedBy)+'</td><td>'+esc(fmtDateOnly_(approvedAt)||'—')+'</td><td>'+adminViewedBadge_(r)+'</td><td>'+websiteBadge_(r)+'</td><td>'+esc(adminCountRows_(r,'roeRows'))+'</td><td class="p60-admin-action-cell"><div class="p60-admin-actions"><button class="p60-btn-sm" data-view-admin-payroll="'+esc(id)+'">View Summary</button>'+doneBtn+'</div></td></tr>'+(S.adminOpenPayrollId===id?'<tr><td colspan="9">'+adminGetPayrollSummaryHtml_(r)+'</td></tr>':'');}).join('')
+      +'</tbody></table></div></div></div>';
+    body.innerHTML=html;
+    adminBindLazyTracking_(rows);
+    adminPrefetchPayrollSummaries_(rows);
+    $('p60BatchBack').onclick=function(){S.adminBatchKey='';S.adminSelected={};S.adminOpenPayrollId='';adminRefreshView_(false);};
+    $('p60SelectAllRows').onchange=function(){var on=this.checked; qsa('[data-admin-select]').forEach(function(c){if(c.disabled)return;S.adminSelected[c.getAttribute('data-admin-select')]=on; c.checked=on;});};
+    $('p60SelectEligible').onclick=function(){S.adminSelected={}; rows.forEach(function(r){if(up(r.website_update_status)!=='WEBSITE_UPDATED')S.adminSelected[cl(r.submission_id||'')]=true;});adminRenderBatchDetail_(batch);};
+    qsa('[data-admin-select]').forEach(function(c){c.onchange=function(){if(c.disabled)return;S.adminSelected[c.getAttribute('data-admin-select')]=c.checked;};});
+    $('p60MarkDone').onclick=function(){adminUpdatePayrolls_(selectedAdminIds_(),'WEBSITE_UPDATED',batch.key);};
+    // Wire all batch detail buttons
+    qsa('[data-view-admin-payroll]').forEach(function(b){b.onclick=function(){
+      var id=b.getAttribute('data-view-admin-payroll');
+      S.adminOpenPayrollId=S.adminOpenPayrollId===id?'':id;
+      var row=rows.find(function(x){return cl(x.submission_id||'')===id;});
+      if(row && S.adminOpenPayrollId && up(row.admin_viewed_status)!=='VIEWED'){
+        // Mark viewed silently — stay in batch detail, no full reload
+        row.admin_viewed_status='VIEWED';
+        adminRenderBatchDetail_(batch);
+        google.script.run
+          .withSuccessHandler(function(){})
+          .withFailureHandler(function(){})
+          .updatePayrollAdminWebsiteStatus({sessionToken:token_(),submissionIds:[id],action:'VIEWED',batchKey:batch.key||''});
+      } else {
+        adminRenderBatchDetail_(batch);
+      }
+    };});
+
+    // data-view-id: View Details button from subCardHtml_ — wire to admin in-memory expand
+    qsa('[data-view-id]').forEach(function(b){b.onclick=function(){
+      var id=b.getAttribute('data-view-id');
+      S.adminOpenPayrollId=String(S.adminOpenPayrollId)===String(id)?'':id;
+      var row=rows.find(function(x){return cl(x.submission_id||'')===id;});
+      if(row && S.adminOpenPayrollId && up(row.admin_viewed_status)!=='VIEWED'){
+        row.admin_viewed_status='VIEWED';
+        google.script.run.withSuccessHandler(function(){}).withFailureHandler(function(){})
+          .updatePayrollAdminWebsiteStatus({sessionToken:token_(),submissionIds:[id],action:'VIEWED',batchKey:batch.key||''});
+      }
+      adminRenderBatchDetail_(batch);
+    };});
+
+    // data-mark-one-website: single row Done button
+    qsa('[data-mark-one-website]').forEach(function(b){b.onclick=function(){
+      adminUpdatePayrolls_([b.getAttribute('data-mark-one-website')],'WEBSITE_UPDATED',batch.key);
+    };});
+
+    // data-recall-id: recall from admin context
+    qsa('[data-recall-id]').forEach(function(b){b.onclick=function(){
+      var id=b.getAttribute('data-recall-id');
+      b.disabled=true;b.textContent='Recalling…';
+      google.script.run
+        .withSuccessHandler(function(res){
+          if(!res||!res.success){toast_((res&&res.error)||'Could not recall.','error');b.disabled=false;b.textContent='Recall';return;}
+          clearPayrollButtonCache_('admin');
+          clearPayrollButtonCache_('review');
+          clearPayrollButtonCache_('submission');
+          toast_('Payroll recalled.','success');
+          var row=rows.find(function(x){return cl(x.submission_id||'')===id;});
+          if(row)row.status='RECALLED';
+          adminRenderBatchDetail_(batch);
+        })
+        .withFailureHandler(function(e){toast_(e&&e.message?e.message:'Could not recall.','error');b.disabled=false;b.textContent='Recall';})
+        .recallPayrollSubmission({sessionToken:token_(),submissionId:id});
+    };});
+
+    // data-edit-id: open inline editor for admin corrections
+    qsa('[data-edit-id]').forEach(function(b){b.onclick=function(){
+      var id=b.getAttribute('data-edit-id');
+      // Navigate to review page with this submission open for editing
+      S.reviewTab='CORRECTION';S.editId=id;S.openId='';
+      openReview_();
+    };});
+  }
+
+  function selectedAdminIds_(){return Object.keys(S.adminSelected||{}).filter(function(k){return S.adminSelected[k];});}
+  function adminViewedBadge_(r){return up(r.admin_viewed_status)==='VIEWED'?'<span class="p60-status-badge IN-REVIEW">Viewed</span>':'<span class="p60-status-badge DRAFT">Not Viewed</span>';}
+  function websiteBadge_(r){return up(r.website_update_status)==='WEBSITE_UPDATED'?'<span class="p60-status-badge APPROVED">Done</span>':'<span class="p60-status-badge CORRECTION-NEEDED">Pending</span>';}
+  function payrollRowIsDone_(r){return up(r&&r.website_update_status)==='WEBSITE_UPDATED'||up(r&&r.website_update_status)==='DONE'||up(r&&r.done_status)==='DONE';}
+  function payrollRowCanMarkDone_(r){return !!r && !payrollRowIsDone_(r) && up(r.status)==='APPROVED';}
+  function adminCountRows_(r,key){var p=r&&r.payload?r.payload:{};if(!p||typeof p!=='object'){try{p=JSON.parse(r.payload_json||'{}');}catch(e){p={};}} return (p[key]||[]).length;}
+
+  function payrollHistoryListFromRow_(row){
+    row=row||{};
+    var h=[];
+    if(Array.isArray(row.status_history))h=h.concat(row.status_history);
+    if(Array.isArray(row.history))h=h.concat(row.history);
+    if(Array.isArray(row.payroll_history))h=h.concat(row.payroll_history);
+    ['payroll_history_json','status_history_json','history_json'].forEach(function(k){
+      var raw=row[k];
+      if(!raw)return;
+      try{
+        var parsed=JSON.parse(raw||'[]');
+        if(Array.isArray(parsed))h=h.concat(parsed);
+      }catch(e){}
+    });
+
+    function pushIf(at,by,action,note){
+      if(!at && !by && !action)return;
+      h.push({at:at||'',by:by||'System',action:action||'',status:action||'',note:note||''});
+    }
+
+    if(!h.length){
+      pushIf(row.submitted_at,row.submitted_by||row.submitted_by_name,'SUBMITTED','Payroll submitted');
+      pushIf(row.reviewed_at||row.admin_viewed_at,row.reviewed_by||row.admin_viewed_by,'VIEWED_BY_MRO','Payroll viewed');
+      pushIf(row.approved_at||row.last_approved_at,row.approved_by_name||row.approved_by||row.reviewed_by||row.updated_by,'APPROVED','Payroll approved');
+      pushIf(row.website_updated_at,row.website_updated_by,'WEBSITE_UPDATED','Marked done by Payroll Admin');
+      pushIf(row.updated_at,row.updated_by,'UPDATED','Payroll updated');
+    }
+
+    var seen={};
+    h=h.filter(function(x){
+      if(!x)return false;
+      var key=[payrollHistoryDate_(x),payrollHistoryBy_(x),x.action||x.status||'',x.note||''].join('|');
+      if(seen[key])return false;
+      seen[key]=true;
+      return true;
+    });
+    h.sort(function(a,b){return new Date(payrollHistoryDate_(a)||0)-new Date(payrollHistoryDate_(b)||0);});
+    return h;
+  }
+
+  function payrollHistoryDate_(x){ return (x&& (x.at||x.updated_at||x.timestamp||x.date||x.created_at))||''; }
+  function payrollHistoryBy_(x){ return (x&& (x.by||x.updated_by||x.user||x.actor||x.name))||'System'; }
+
+  function approvedByFromPayroll_(row){
+    row=row||{};
+    var direct=cl(row.approved_by_name||row.approved_by||row.reviewed_by||row.updated_by||row.admin_viewed_by||'');
+    if(direct)return direct;
+    var h=payrollHistoryListFromRow_(row).slice().reverse();
+    for(var i=0;i<h.length;i++){
+      var action=up(h[i].action||h[i].status||'');
+      if(action==='APPROVED'||action.indexOf('APPROVED')!==-1){
+        return payrollHistoryBy_(h[i]);
+      }
+    }
+    return 'Not available';
+  }
+
+  function approvedAtFromPayroll_(row){
+    row=row||{};
+    var direct=cl(row.approved_at||row.last_approved_at||'');
+    if(direct)return direct;
+    var h=payrollHistoryListFromRow_(row).slice().reverse();
+    for(var i=0;i<h.length;i++){
+      var action=up(h[i].action||h[i].status||'');
+      if(action==='APPROVED'||action.indexOf('APPROVED')!==-1){
+        return payrollHistoryDate_(h[i]);
+      }
+    }
+    return row.reviewed_at||row.updated_at||'';
+  }
+
+
+  function submittedByFromPayroll_(row){
+    row=row||{};
+    var direct=cl(row.submitted_by||row.submitted_by_name||row.created_by_name||row.created_by||'');
+    if(direct)return direct;
+    var h=payrollHistoryListFromRow_(row);
+    for(var i=0;i<h.length;i++){
+      var action=up(h[i].action||h[i].status||'');
+      if(action==='SUBMITTED'||action==='RESUBMITTED'||action.indexOf('SUBMITTED')!==-1){
+        var by=payrollHistoryBy_(h[i]);
+        if(by && up(by)!=='SYSTEM')return by;
+      }
+    }
+    return 'Not available';
+  }
+
+  function adminPayrollSummaryHtml_(r){
+    r=r||{};
+    var p=r&&r.payload?r.payload:{};if(!p||typeof p!=='object'){try{p=JSON.parse(r.payload_json||'{}');}catch(e){p={};}}
+    var approvedBy=approvedByFromPayroll_(r);
+    var approvedAt=approvedAtFromPayroll_(r);
+    var html='<div class="p60-card" style="box-shadow:none;border:1px solid #d5d5d5"><div class="p60-card-body"><h3>Payroll Update Summary</h3><p class="p60-muted">Restaurant '+esc(r.restaurant_number||'—')+' · Week Ending '+esc(fmtDateOnly_(r.pay_period_ending))+' · '+esc(r.submission_id||'')+'</p>';
+    html+='<div class="p60-section-label">Payroll Details</div>';
+    html+='<table class="p60-read-table" style="margin-bottom:10px"><tbody>'
+      +'<tr><th>Restaurant</th><td>'+esc(r.restaurant_number||'—')+'</td><th>Week Ending</th><td>'+esc(fmtDateOnly_(r.pay_period_ending)||'—')+'</td></tr>'
+      +'<tr><th>Time Card Updated</th><td>'+esc(r.time_card_updated||'—')+'</td><th>Stat Hours at 1.0</th><td>'+esc(r.stat_hours_1_0||'—')+'</td></tr>'
+      +'<tr><th>Submitted By</th><td>'+esc(submittedByFromPayroll_(r))+'</td><th>Submitted At</th><td>'+esc(fmtDateTime_(r.submitted_at)||'—')+'</td></tr>'
+      +'<tr><th>Status</th><td>'+esc(statusLabel_(r.status||''))+'</td><th>Last Updated</th><td>'+esc(fmtDateTime_(r.updated_at)||'—')+'</td></tr>'
+      +'</tbody></table>';
+    html+='<div class="p60-section-label">Approval and Admin Status</div>';
+    html+='<table class="p60-read-table" style="margin-bottom:10px"><tbody><tr><th>Approved By</th><td>'+esc(approvedBy)+'</td><th>Approved Date</th><td>'+esc(fmtDateTime_(approvedAt)||'Not available')+'</td></tr><tr><th>Viewed</th><td>'+adminViewedBadge_(r)+'</td><th>Done Status</th><td>'+websiteBadge_(r)+'</td></tr></tbody></table>';
+    html+=adminSummarySection_('Attendance Bonus',p.attendanceBonusRows||[]);
+    html+=adminSummarySection_('New Hire or Returned From Leave',p.newHireRows||[]);
+    html+=adminSummarySection_('ROE',p.roeRows||[]);
+    html+=adminSummarySection_('Missing or Training Hours',p.missingTrainingRows||[]);
+    html+=adminSummarySection_('Uniform Deduction',p.uniformDeductionRows||[]);
+    html+='<div class="p60-section-label">Special Notes</div><div class="p60-note-box">'+esc(r.special_notes||'No notes')+'</div>';
+    html+=adminLazyTrackingPlaceholder_(r);
+    html+='</div></div>'; return html;
+  }
+
+  function isMeaningfulPayrollEntry_(row){
+    row=row||{};
+    function good(v){
+      v=cl(v);
+      if(!v)return false;
+      if(up(v)==='SELECT EMPLOYEE')return false;
+      if(up(v)==='SELECT ROE APPLICATION')return false;
+      return true;
+    }
+    var hasEmployee=good(row.employeeName)||good(row.employeeId)||good(row.firstName)||good(row.lastName);
+    if(hasEmployee)return true;
+    return Object.keys(row).some(function(k){
+      var v=cl(row[k]);
+      if(!good(v))return false;
+      if(k==='type' && (up(v)==='NEW HIRE'||up(v)==='RETURNED FROM LEAVE') && !hasEmployee)return false;
+      if(k==='roeApplicationId' && !good(row.employeeName) && !good(row.terminationDate) && !good(row.reasonForSeparation))return false;
+      return true;
+    });
+  }
+
+  function adminSummarySection_(title,rows){
+    rows=(rows||[]).filter(isMeaningfulPayrollEntry_);
+    if(!rows.length)return '';
+    function label_(key){
+      var map={
+        employeeId:'Employee ID', employeeName:'Employee Name', firstName:'First Name', lastName:'Last Name',
+        attendancePercentage:'Attendance %', type:'Type', startDate:'Start Date',
+        roeApplicationId:'ROE Application ID', roeId:'ROE ID', submissionId:'Submission ID',
+        terminationDate:'Last Day of Work', lastDayOfWork:'Last Day of Work', reasonForSeparation:'Reason for Separation',
+        missingHours:'Missing Hours', trainingHours:'Training Hours', reason:'Reason',
+        item:'Item', amount:'Amount', notes:'Notes'
+      };
+      if(map[key])return map[key];
+      return String(key||'').replace(/_/g,' ').replace(/([a-z])([A-Z])/g,'$1 $2').replace(/\b\w/g,function(c){return c.toUpperCase();});
+    }
+    function val_(value){return value==null||value===''?'—':value;}
+    var keys=Object.keys(rows[0]||{}).filter(function(k){return k && rows.some(function(row){var v=cl(row[k]); return v && up(v)!=='SELECT EMPLOYEE';});});
+    if(!keys.length)return '';
+    return'<div class="p60-section-label">'+esc(title)+'</div><div class="p60-summary-list">'+rows.map(function(row){return'<div class="p60-summary-item">'+keys.map(function(k){return'<div class="p60-summary-pair"><span>'+esc(label_(k))+'</span><strong>'+esc(val_(row[k]))+'</strong></div>';}).join('')+'</div>';}).join('')+'</div>';
+  }
+
+  function adminUpdatePayrolls_(ids,action,batchKey){
+    ids=(ids||[]).map(String).filter(Boolean);
+    if(!ids.length){toast_('Select at least one payroll.','error');return;}
+    if(S.busy)return;
+    S.busy=true;
+
+    var btns=[];
+    ids.forEach(function(id){
+      var b=document.querySelector('[data-mark-one-website="'+cssEscape_(id)+'"]');
+      if(b)btns.push(b);
+    });
+    var bulk=$('p60MarkDone');
+    if(bulk)btns.push(bulk);
+    btns.forEach(function(b){
+      b.disabled=true;
+      b.setAttribute('aria-busy','true');
+      b.dataset.oldText=b.textContent;
+      b.textContent='Working...';
+    });
+
+    function markRowsDoneInMemory_(data){
+      if(!data)return;
+      function touch(row){
+        if(!row)return;
+        var id=cl(row.submission_id||row.submissionId||'');
+        if(ids.indexOf(id)===-1)return;
+        if(action==='WEBSITE_UPDATED'){
+          row.website_update_status='WEBSITE_UPDATED';
+          row.website_updated_at=row.website_updated_at||new Date().toISOString();
+          row.admin_viewed_status=row.admin_viewed_status||'VIEWED';
+        }
+      }
+      (data.approvedPayrolls||[]).forEach(touch);
+      (data.submissions||[]).forEach(touch);
+      (data.rows||[]).forEach(touch);
+      (data.batches||[]).forEach(function(batch){
+        (batch.rows||[]).forEach(touch);
+        var received=(batch.rows||[]).filter(function(r){return cl(r.submission_id||r.submissionId||'');}).length;
+        var done=(batch.rows||[]).filter(function(r){return up(r.website_update_status)==='WEBSITE_UPDATED';}).length;
+        if(received){
+          batch.received=batch.received||received;
+          batch.updated=done;
+          batch.pending=Math.max(0,Number(batch.totalRestaurants||received)-Number(batch.received||received));
+          batch.status=done>=Number(batch.received||received)?'COMPLETED':(done>0?'PARTIAL':'PENDING');
+        }
+      });
+      if(data.batch){
+        (data.batch.rows||[]).forEach(touch);
+        var rcv=(data.batch.rows||[]).filter(function(r){return cl(r.submission_id||r.submissionId||'');}).length;
+        var dn=(data.batch.rows||[]).filter(function(r){return up(r.website_update_status)==='WEBSITE_UPDATED';}).length;
+        if(rcv){
+          data.batch.received=data.batch.received||rcv;
+          data.batch.updated=dn;
+          data.batch.status=dn>=Number(data.batch.received||rcv)?'COMPLETED':(dn>0?'PARTIAL':'PENDING');
+        }
+      }
+      if(data.summary&&action==='WEBSITE_UPDATED'){
+        var count=ids.length;
+        data.summary.payrollWebsiteUpdated=Number(data.summary.payrollWebsiteUpdated||0)+count;
+      }
+    }
+
+    function updateAllAdminCaches_(){
+      markRowsDoneInMemory_(S.adminData);
+      var cache=S.adminViewCache||{};
+      Object.keys(cache).forEach(function(k){markRowsDoneInMemory_(cache[k]&&cache[k].data);});
+      var cacheMap=S.adminListCacheMap||{};
+      Object.keys(cacheMap).forEach(function(k){markRowsDoneInMemory_(cacheMap[k]&&cacheMap[k].data);});
+      if(S.adminListCache)markRowsDoneInMemory_(S.adminListCache.data);
+      var buttonCache=buttonCache_();
+      Object.keys(buttonCache).forEach(function(k){if(k.indexOf('admin:')===0)markRowsDoneInMemory_(buttonCache[k]&&buttonCache[k].data);});
+      if(S.adminData){
+        setButtonCache_(adminButtonCacheKey_(),S.adminData);
+        adminSetCachedView_(S.adminData);
+      }
+    }
+
+    google.script.run
+      .withSuccessHandler(function(res){
+        S.busy=false;
+        btns.forEach(function(b){
+          b.disabled=false;
+          b.removeAttribute('aria-busy');
+          b.textContent=b.dataset.oldText||'Done';
+        });
+        if(!res||!res.success){toast_((res&&res.error)||'Could not update payrolls.','error');return;}
+
+        var savedCount=(res.data&&typeof res.data.count==='number')?res.data.count:ids.length;
+        if(savedCount<ids.length){
+          toast_('Could not save all selected payrolls. Saved '+savedCount+' of '+ids.length+'. Refresh and try again.','error');
+        }
+        if(savedCount<1)return;
+
+        toast_((action==='WEBSITE_UPDATED'?'Marked done: ':'Updated ')+savedCount+' payroll(s).','success');
+        S.adminSelected={};
+        updateAllAdminCaches_();
+
+        // Stay on the same tab and same expanded batch. Do not force a full reload.
+        if(S.adminBatchKey && S.adminData){
+          var batch=(S.adminData.batch)||((S.adminData.batches||[]).find(function(b){return b.key===S.adminBatchKey;}));
+          if(batch){
+            adminRenderBatchDetail_(batch);
+            setTimeout(adminPrefetchRoeTabs_,80);
+            return;
+          }
+        }
+        renderPayrollAdmin_();
+        setTimeout(adminPrefetchRoeTabs_,80);
+      })
+      .withFailureHandler(function(e){
+        S.busy=false;
+        btns.forEach(function(b){
+          b.disabled=false;
+          b.removeAttribute('aria-busy');
+          b.textContent=b.dataset.oldText||'Done';
+        });
+        toast_(e&&e.message?e.message:'Could not update payrolls.','error');
+      })
+      .updatePayrollAdminWebsiteStatus({sessionToken:token_(),submissionIds:ids,action:action,batchKey:batchKey||''});
+  }
+
+  function cssEscape_(value){
+    value=String(value||'');
+    if(window.CSS&&typeof window.CSS.escape==='function')return window.CSS.escape(value);
+    return value.replace(/[^a-zA-Z0-9_-]/g,'\\$&');
+  }
+
+  function adminRenderApproved_(data){
+    var body=$('p60AdminBody'); if(!body)return;
+    var batches=data.batches||[];
+    body.innerHTML='<div class="p60-card"><div class="p60-card-body"><h3>All Approved Payrolls by Week Ending</h3>'+(batches.length?'<table class="p60-read-table"><thead><tr><th>Week Ending</th><th>Brand</th><th>Received</th><th>Done</th><th>Status</th><th>Action</th></tr></thead><tbody>'+batches.map(function(b){return'<tr><td>'+esc(fmtDateOnly_(b.week))+'</td><td>'+esc(b.brand)+'</td><td>'+esc(b.received)+'</td><td>'+esc(b.updated)+' / '+esc(b.received)+'</td><td>'+batchStatusBadge_(b)+'</td><td><button class="p60-btn-sm" data-open-approved-batch="'+esc(b.key)+'">Open Batch</button></td></tr>';}).join('')+'</tbody></table>':'<div class="p60-empty">No approved payrolls found.</div>')+'</div></div>';
+    qsa('[data-open-approved-batch]').forEach(function(b){b.onclick=function(){S.adminTab='BATCHES';S.adminBatchKey=b.getAttribute('data-open-approved-batch');S.adminOpenPayrollId='';adminRefreshView_(false);};});
+  }
+
+  function adminRenderRoes_(rows,pending,total){
+    var body=$('p60AdminBody'); if(!body)return;
+    var page=S.adminPage||0;
+    rows=rows||[];
+    total=Number(total||rows.length||0);
+    if(!total){body.innerHTML='<div class="p60-empty">No '+(pending?'pending applications':'completed ROEs')+' found.</div>';return;}
+    body.innerHTML='<div class="p60-card"><div class="p60-card-body"><h3>'+(pending?'Pending ROE Applications':'Completed ROEs')+'</h3><p class="p60-muted">Showing '+Math.min(rows.length,ADMIN_PAGE_SIZE)+' of '+total+'. Click View or click the row to open details. No save happens when opening.</p>'+adminRoeRowsHtml_(rows,pending)+adminPagerSimple_(page,total,ADMIN_PAGE_SIZE)+'</div></div>';
+
+    function toggleRoe_(id){
+      if(!id)return;
+      S.adminOpenRoeId=S.adminOpenRoeId===id?'':id;
+      adminRenderRoes_(rows,pending,total);
+    }
+
+    qsa('[data-roe-toggle]').forEach(function(b){b.onclick=function(e){
+      if(e){e.preventDefault();e.stopPropagation();}
+      toggleRoe_(b.getAttribute('data-roe-toggle'));
+    };});
+
+    qsa('[data-roe-row]').forEach(function(tr){tr.onclick=function(e){
+      var target=e&&e.target;
+      if(target&&target.closest&&target.closest('button,textarea,input,select,a'))return;
+      toggleRoe_(tr.getAttribute('data-roe-row'));
+    };});
+
+    qsa('[data-roe-approve]').forEach(function(b){b.onclick=function(e){
+      if(e){e.preventDefault();e.stopPropagation();}
+      var id=b.getAttribute('data-roe-approve');
+      var notes=($('adminRoeNotes_'+id)||{}).value||'';
+      b.dataset.origText=b.textContent;
+      b.disabled=true;b.textContent='Approving...';
+      adminUpdateRoe_(id,'ROE_APPROVED',notes,{askDeactivate:true});
+    };});
+    qsa('[data-roe-reject]').forEach(function(b){b.onclick=function(e){
+      if(e){e.preventDefault();e.stopPropagation();}
+      var id=b.getAttribute('data-roe-reject');
+      var notes=($('adminRoeNotes_'+id)||{}).value||'';
+      if(!notes){
+        toast_('Enter a correction note first.','error');
+        var ta=$('adminRoeNotes_'+id);
+        if(ta){ta.style.border='2px solid #b51218';ta.focus();}
+        return;
+      }
+      b.dataset.origText=b.textContent;
+      b.disabled=true;b.textContent='Sending...';
+      adminUpdateRoe_(id,'CORRECTION_NEEDED',notes);
+    };});
+    qsa('[data-roe-deactivate]').forEach(function(b){b.onclick=function(e){
+      if(e){e.preventDefault();e.stopPropagation();}
+      b.dataset.origText=b.textContent;
+      b.disabled=true;b.textContent='Deactivating...';
+      adminDeactivateRoe_(b.getAttribute('data-roe-deactivate'));
+    };});
+    adminBindSimplePager_(page,total,ADMIN_PAGE_SIZE);
+  }
+  function adminRoeRowsHtml_(rows,pending){
+    return '<div class="p60-table-wrap p60-roe-table-wrap"><table class="p60-read-table p60-roe-table"><thead><tr><th>ROE ID</th><th>Employee</th><th>Restaurant</th><th>Last Day</th><th>Reason</th><th>Status</th><th>Actions</th></tr></thead><tbody>'+rows.map(function(r){
+      var id=r.roe_id||'';
+      var open=S.adminOpenRoeId===id;
+      var done=String(r.deactivated_employee||'').toUpperCase()==='YES'||['COMPLETED','DEACTIVATED'].indexOf(up(r.status||''))!==-1;
+      var action=pending
+        ? '<div class="p60-roe-actions"><button class="p60-btn-sm p60-btn-xs" data-roe-toggle="'+esc(id)+'">'+(open?'Hide':'View')+'</button><button class="p60-btn-sm p60-btn-xs p60-btn-approve" data-roe-approve="'+esc(id)+'">Approve</button><button class="p60-btn-danger p60-btn-xs" data-roe-reject="'+esc(id)+'">Correction</button></div>'
+        : '<div class="p60-roe-actions"><button class="p60-btn-sm p60-btn-xs" data-roe-toggle="'+esc(id)+'">'+(open?'Hide':'View')+'</button><span class="p60-status APPROVED">'+(done?'Completed':'Approved')+'</span></div>';
+      var row='<tr class="p60-roe-main-row" data-roe-row="'+esc(id)+'" style="cursor:pointer"><td class="p60-roe-id">'+esc(id)+'</td><td><strong>'+esc(r.employee_name||'—')+'</strong></td><td>'+esc(r.restaurant_number||'—')+'</td><td>'+esc(fmtDateOnly_(r.last_day_of_work||''))+'</td><td>'+esc(r.reason_for_separation||'—')+'</td><td>'+badgeHtml_(r.status)+'</td><td class="p60-roe-action-cell">'+action+'</td></tr>';
+      if(open){row+='<tr class="p60-roe-detail-row"><td colspan="7">'+adminRoeDetailHtml_(r,pending)+'</td></tr>';}
+      return row;
+    }).join('')+'</tbody></table></div>';
+  }
+  function adminRoeNameParts_(r){
+    var full=cl(r.employee_name||r.employeeName||'');
+    var first=cl(r.first_name||r.firstName||r.employee_first_name||r.employeeFirstName||'');
+    var last=cl(r.last_name||r.lastName||r.employee_last_name||r.employeeLastName||'');
+    if((!first || !last) && full){
+      var parts=full.split(/\s+/).filter(Boolean);
+      if(!first) first=parts[0]||'';
+      if(!last) last=parts.length>1?parts.slice(1).join(' '):'';
+    }
+    return {first:first,last:last,full:full};
+  }
+
+  function adminRoeDetailHtml_(r,pending){
+    var id=r.roe_id||'';
+    var nameParts=adminRoeNameParts_(r);
+    return '<div class="p60-roe-detail-card">'
+      +'<div class="p60-roe-detail-head"><strong>ROE Form Details</strong><span>'+esc(id||'')+'</span></div>'
+      +'<div class="p60-roe-detail-grid">'
+      +roeDetailItem_('Restaurant',r.restaurant_number||'—')
+      +roeDetailItem_('Employee',nameParts.full||r.employee_name||'—')
+      +roeDetailItem_('First Name',nameParts.first||'—')
+      +roeDetailItem_('Last Name',nameParts.last||'—')
+      +roeDetailItem_('Last Day of Work',fmtDateOnly_(r.last_day_of_work||''))
+      +roeDetailItem_('Reason',r.reason_for_separation||'—')
+      +roeDetailItem_('Legal Status',r.legal_status||'—')
+      +roeDetailItem_('Health Benefits',r.health_benefits||'—')
+      +roeDetailItem_('Station Champion',r.station_champion||'—')
+      +roeDetailItem_('Payroll Attached',r.payroll_submission_id||'Not attached')
+      +(!pending?roeDetailItem_('Employee Deactivated',String(r.deactivated_employee||'').toUpperCase()==='YES'?'Yes':'No'):'')
+      +'</div>'
+      +(pending?'<div class="p60-roe-correction"><label>Correction Notes</label><textarea id="adminRoeNotes_'+esc(id)+'" placeholder="Type correction note only if you are sending it back"></textarea></div>':'')
+      +'<div class="p60-section-label">Notes</div><div class="p60-note-box">'+esc(r.extra_notes||r.notes||r.admin_notes||'No notes')+'</div>'
+      +'</div>';
+  }
+  function roeDetailItem_(label,value){return '<div class="p60-roe-detail-item"><span>'+esc(label)+'</span><strong>'+esc(value||'—')+'</strong></div>';}
+  function adminPagerSimple_(page,total,pageSize){var pages=Math.ceil(total/(pageSize||ADMIN_PAGE_SIZE));return pages>1?'<div class="p60-admin-pager"><button class="p60-btn-sm" id="p60AdminPrev" '+(page<=0?'disabled':'')+'>Previous</button><span>Page '+(page+1)+' of '+pages+'</span><button class="p60-btn-sm" id="p60AdminNext" '+(page>=pages-1?'disabled':'')+'>Next</button></div>':'';}
+  function adminBindSimplePager_(page,total,pageSize){var pages=Math.ceil(total/(pageSize||ADMIN_PAGE_SIZE));var p=$('p60AdminPrev'),n=$('p60AdminNext');if(p)p.onclick=function(){S.adminPage=Math.max(0,page-1);adminRefreshView_(false);};if(n)n.onclick=function(){S.adminPage=Math.min(pages-1,page+1);adminRefreshView_(false);};}
+
+  function adminRenderAudit_(events,total){
+    var body=$('p60AdminBody'); if(!body)return;
+    var page=S.adminAuditPage||0;
+    body.innerHTML='<div class="p60-card"><div class="p60-card-body"><h3>Audit History</h3><p class="p60-muted">Showing '+ADMIN_PAGE_SIZE+' audit entries per page.</p>'+(events.length?'<table class="p60-read-table"><thead><tr><th>Date</th><th>Action</th><th>Restaurant</th><th>By</th><th>Reference</th><th>Note</th></tr></thead><tbody>'+events.map(function(e){return'<tr><td>'+esc(fmtDateTime_(e.at))+'</td><td>'+esc(e.action||'')+'</td><td>'+esc(e.restaurant||'')+'</td><td>'+esc(e.by||'')+'</td><td>'+esc(e.ref||'')+'</td><td>'+esc(e.note||'')+'</td></tr>';}).join('')+'</tbody></table>'+adminAuditPager_(page,total,ADMIN_PAGE_SIZE):'<div class="p60-empty">No audit history found.</div>')+'</div></div>';
+    adminBindAuditPager_(page,total,ADMIN_PAGE_SIZE);
+  }
+  function adminAuditPager_(page,total,pageSize){var pages=Math.ceil(total/(pageSize||ADMIN_PAGE_SIZE));return pages>1?'<div class="p60-admin-pager"><button class="p60-btn-sm" id="p60AuditPrev" '+(page<=0?'disabled':'')+'>Previous</button><span>Page '+(page+1)+' of '+pages+'</span><button class="p60-btn-sm" id="p60AuditNext" '+(page>=pages-1?'disabled':'')+'>Next</button></div>':'';}
+  function adminBindAuditPager_(page,total,pageSize){var pages=Math.ceil(total/(pageSize||ADMIN_PAGE_SIZE));var p=$('p60AuditPrev'),n=$('p60AuditNext');if(p)p.onclick=function(){S.adminAuditPage=Math.max(0,page-1);adminRefreshView_(false);};if(n)n.onclick=function(){S.adminAuditPage=Math.min(pages-1,page+1);adminRefreshView_(false);};}
+
+  function adminUpdateRoe_(id,status,notes,opts){
+    opts=opts||{};
+    if(S.busy)return;
+    S.busy=true;
+    qsa('[data-roe-approve], [data-roe-reject], [data-roe-deactivate]').forEach(function(b){b.disabled=true;});
+    google.script.run
+      .withSuccessHandler(function(res){
+        S.busy=false;
+        if(!res||!res.success){
+          qsa('[data-roe-approve], [data-roe-reject], [data-roe-deactivate]').forEach(function(b){b.disabled=false;b.textContent=b.dataset.origText||b.textContent;});
+          toast_((res&&res.error)||'Could not update ROE.','error');return;
+        }
+        toast_(status==='ROE_APPROVED'?'ROE approved.':status==='CORRECTION_NEEDED'?'Correction sent.':'ROE updated.','success');
+        adminClearViewCache_();
+        adminUpdateRoeCardInPlace_(id, status);
+        if(status==='ROE_APPROVED'&&opts.askDeactivate){
+          adminShowDeactivateChoice_(id);
+        } else {
+          S.adminForceRefresh=true;
+          adminRefreshView_(false);
+        }
+      })
+      .withFailureHandler(function(e){S.busy=false;qsa('[data-roe-approve], [data-roe-reject], [data-roe-deactivate]').forEach(function(b){b.disabled=false;});toast_(e&&e.message?e.message:'Could not update ROE.','error');})
+      .updatePayrollRoeStatus({sessionToken:token_(),roeId:id,status:status,adminNotes:notes||''});
+  }
+
+  // Optimistic ROE card update — no full reload needed
+  function adminUpdateRoeCardInPlace_(id, newStatus){
+    S.adminOpenRoeId='';
+    // Update in cached data
+    var d=S.adminData||{};
+    var roes=d.roeApplications||d.roes||[];
+    var roe=roes.find(function(r){return cl(r.roe_id||r.roeId||'')===cl(id);});
+    if(roe){
+      roe.status=newStatus;
+      if(newStatus==='DEACTIVATED') roe.deactivated_employee='YES';
+    }
+    // Re-render just the ROE card if visible
+    var card=document.querySelector('[data-roe-card="'+cssEscape_(id)+'"]');
+    if(card && roe){
+      var pendingRoes=roes.filter(function(r){
+        var s=up(r.status||'');
+        return s!=='ROE_APPROVED'&&s!=='COMPLETED'&&s!=='DEACTIVATED';
+      });
+      var doneRoes=roes.filter(function(r){
+        var s=up(r.status||'');
+        return s==='ROE_APPROVED'||s==='COMPLETED'||s==='DEACTIVATED';
+      });
+      // Move card to correct tab section if status changed
+      var isPending=['ROE_SUBMITTED','CORRECTION_NEEDED','ATTACHED_TO_PAYROLL'].indexOf(up(newStatus))!==-1;
+      if(!isPending){
+        // Fade out and remove from pending, re-render done section
+        card.style.transition='opacity .3s,transform .3s';
+        card.style.opacity='0';
+        card.style.transform='translateX(10px)';
+        setTimeout(function(){
+          card.remove();
+          // Update pending count badge if visible
+          var pendingLabel=document.querySelector('[data-roe-pending-count]');
+          if(pendingLabel) pendingLabel.textContent=pendingRoes.length;
+        },300);
+      }
+    } else {
+      // Fallback: soft reload (no skeleton flash)
+      adminRefreshView_(false);
+    }
+  }
+
+  function adminShowDeactivateChoice_(id){
+    var old=$('p60RoeDeactivateModal');
+    if(old)old.remove();
+    var box=document.createElement('div');
+    box.id='p60RoeDeactivateModal';
+    box.style.cssText='position:fixed;inset:0;z-index:99999;background:rgba(15,23,42,.45);display:flex;align-items:center;justify-content:center;padding:18px';
+    box.innerHTML='<div style="background:#fff;border-radius:14px;box-shadow:0 24px 80px rgba(0,0,0,.25);max-width:420px;width:100%;padding:18px;border:1px solid #e5e7eb"><h3 style="margin:0 0 8px;font-size:1.05rem">ROE approved</h3><p style="margin:0 0 14px;color:#475569;font-size:.92rem;line-height:1.45">Do you want to deactivate this employee now?</p><div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap"><button class="p60-btn-sm" id="p60RoeKeepActive">No, keep active</button><button class="p60-btn-danger" id="p60RoeDeactivateNow">Yes, deactivate</button></div></div>';
+    document.body.appendChild(box);
+    $('p60RoeKeepActive').onclick=function(){box.remove();S.adminForceRefresh=true;adminRefreshView_(false);};
+    $('p60RoeDeactivateNow').onclick=function(){box.remove();adminDeactivateRoe_(id);};
+  }
+
+  function adminDeactivateRoe_(id){
+    if(S.busy)return;
+    S.busy=true;
+    qsa('[data-roe-approve], [data-roe-reject], [data-roe-deactivate]').forEach(function(b){b.disabled=true;});
+    google.script.run
+      .withSuccessHandler(function(res){
+        S.busy=false;
+        if(!res||!res.success){qsa('[data-roe-approve], [data-roe-reject], [data-roe-deactivate]').forEach(function(b){b.disabled=false;});toast_((res&&res.error)||'Could not deactivate employee.','error');return;}
+        toast_('Employee deactivated.','success');
+        adminUpdateRoeCardInPlace_(id, 'DEACTIVATED');
+        adminClearViewCache_();
+        S.adminForceRefresh=true;
+        adminRefreshView_(false);
+      })
+      .withFailureHandler(function(e){S.busy=false;qsa('[data-roe-approve], [data-roe-reject], [data-roe-deactivate]').forEach(function(b){b.disabled=false;});toast_(e&&e.message?e.message:'Could not deactivate employee.','error');})
+      .deactivateEmployeeFromRoe({sessionToken:token_(),roeId:id});
+  }
+
+
+
+  // ── RESTORED CORE PAYROLL HANDLERS ───────────────────────────────────
+function historyHtml_(row){
+  var h=payrollHistoryListFromRow_(row);
+  if(!h.length)return '<div class="p60-section-label">Tracking Details</div><div class="p60-empty">No tracking details yet.</div>';
+  return '<div class="p60-section-label">Tracking Details</div><div class="p60-history">'+h.slice().reverse().map(function(x){
+    var action=up(x.action||x.status||'');
+    var label=statusLabel_(x.action||x.status||'');
+    if(action==='WEBSITE_UPDATED')label='Marked Done';
+    if(action==='VIEWED_BY_MRO')label='Viewed by MRO';
+    var by=payrollHistoryBy_(x);
+    var when=fmtDateTime_(payrollHistoryDate_(x));
+    var note=x.note?'<div class="p60-muted">'+esc(x.note)+'</div>':'';
+    return '<div class="p60-history-item"><b>'+esc(label)+'</b><span>'+esc(when||'—')+'</span><div>By '+esc(by||'System')+'</div>'+note+'</div>';
+  }).join('')+'</div>';
+}
+  function rowTableHtml_(key,rows){
+    var cfg=SECTIONS[key];var rn=draft_().restaurantNumber||'';
+    var html='<div class="p60-table-wrap"><table class="p60-row-table" id="payrollTable_'+key+'"><thead><tr>';
+    cfg.columns.forEach(function(c){html+='<th>'+esc(c.label)+'</th>';});
+    html+='<th></th></tr></thead><tbody>';
+    (rows&&rows.length?rows:[{}]).forEach(function(row){html+=rowHtml_(key,row,rn);});
+    return html+'</tbody></table></div><button class="p60-btn-sm p60-add-row" data-add-row="'+key+'" style="margin-top:8px">+ '+esc(cfg.addText)+'</button>';
+  }
+  function rowHtml_(key,row,rn){
+    var cfg=SECTIONS[key];var html='<tr>';
+    cfg.columns.forEach(function(c){
+      html+='<td>';
+      if(c.type==='employee')html+='<select data-field="employeeId">'+empOptions_(row[c.key]||row.employeeName,rn)+'</select>';
+      else if(c.type==='roeApplication')html+='<select data-field="roeApplicationId">'+roeOptions_(row.roeApplicationId||row.roeId||row.submissionId)+'</select>';
+      else if(c.type==='readonly')html+='<input data-field="'+esc(c.key)+'" type="text" readonly value="'+esc(row[c.key]||'')+'">';
+      else if(c.type==='select')html+='<select data-field="'+esc(c.key)+'">'+c.options.map(function(o){return'<option'+(String(row[c.key]||'')===o?' selected':'')+'>'+esc(o)+'</option>';}).join('')+'</select>';
+      else html+='<input data-field="'+esc(c.key)+'" type="'+esc(c.type||'text')+'" value="'+esc(row[c.key]||'')+'">';
+      html+='</td>';
+    });
+    return html+'<td><button class="p60-btn-danger" type="button" data-remove-row>✕</button></td></tr>';
+  }
+  function bindWizard_(){
+    var start=$('p60StartWizard'),prev=$('p60Prev'),next=$('p60Next'),draftBtn=$('p60Draft'),submit=$('p60Submit');
+    if(start)start.onclick=function(){readScreen_();S.step=1;renderWizard_();};
+    if(prev)prev.onclick=function(){readScreen_();S.step=Math.max(0,S.step-1);renderWizard_();};
+    if(next)next.onclick=function(){readScreen_();S.step=Math.min(STEPS.length-1,S.step+1);renderWizard_();};
+    if(draftBtn)draftBtn.onclick=function(){doSave_('draft');};
+    if(submit)submit.onclick=function(){confirmSubmit_();};
+    var rnSel=$('payrollRnV360');
+    if(rnSel)rnSel.onchange=function(){draft_().restaurantNumber=rnSel.value;qsa('select[data-field="employeeId"]').forEach(function(s){var v=s.value;s.innerHTML=empOptions_(v,rnSel.value);});};
+    qsa('[data-sec-ans]').forEach(function(b){b.onclick=function(){var key=b.getAttribute('data-sec-key'),ans=b.getAttribute('data-sec-ans');S.answers[key]=ans;if(ans==='SKIP'){draft_()[key]=[];readScreen_();S.step=Math.min(STEPS.length-1,S.step+1);renderWizard_();return;}if(ans==='YES'&&!(draft_()[key]||[]).length)draft_()[key]=[{}];renderWizard_();};});
+    qsa('[data-add-row]').forEach(function(b){b.onclick=function(){readScreen_();var k=b.getAttribute('data-add-row');draft_()[k]=draft_()[k]||[];draft_()[k].push({});S.answers[k]='YES';renderWizard_();};});
+    qsa('[data-remove-row]').forEach(function(b){b.onclick=function(){b.closest('tr').remove();readScreen_();};});
+    var applyRoeBtn=$('p60ApplyRoeFromWizard');
+    if(applyRoeBtn)applyRoeBtn.onclick=function(e){if(e)e.preventDefault();readScreen_();openApplyRoeTab_();};
+    bindRoeApplicationSelects_(document);
+  }
+  function confirmSubmit_(){
+    readScreen_();var p=buildPayload_();var err=validatePayload_(p);if(err){toast_(err,'error');return;}
+    var slide=$('p60Slide');if(!slide)return;
+    if($('p60FinalConfirm')){doSave_('submit');return;}
+    slide.insertAdjacentHTML('beforeend','<div id="p60FinalConfirm" class="p60-confirm" style="margin-top:12px">Ready to submit for restaurant <b>'+esc(p.restaurantNumber)+'</b>, week ending <b>'+esc(p.payPeriodEnding)+'</b>?<button class="p60-btn-primary" id="p60ConfirmYes" style="margin-left:12px">Yes, Submit</button><button class="p60-btn-sm" id="p60ConfirmNo" style="margin-left:8px">Cancel</button></div>');
+    $('p60ConfirmYes').onclick=function(){doSave_('submit');};
+    $('p60ConfirmNo').onclick=function(){var el=$('p60FinalConfirm');if(el)el.remove();};
+  }
+  function doSave_(mode){
+    if(S.busy)return;
+    var p=buildPayload_();var err=validatePayload_(p);if(err){toast_(err,'error');return;}
+    S.busy=true;
+    var btn=$(mode==='draft'?'p60Draft':'p60Submit');
+    if(btn){btn.disabled=true;btn.textContent=mode==='draft'?'Saving…':'Submitting…';}
+    var fnName=mode==='draft'?'savePayrollSubmissionDraft':'submitPayrollOnBehalf';
+    google.script.run
+      .withSuccessHandler(function(res){
+        S.busy=false;if(btn){btn.disabled=false;btn.textContent=mode==='draft'?'Save Draft':'Submit Payroll';}
+        if(!res||!res.success){toast_((res&&res.error)||'Could not save.','error');return;}
+        clearPayrollButtonCache_('submission');
+        clearPayrollButtonCache_('review');
+        clearPayrollButtonCache_('admin');
+        var data=res.data||{};var newId=data.submissionId||data.submission_id||p.submissionId||'';
+        if(newId)draft_().submissionId=newId;
+        clearPayrollButtonCache_('submission');
+        if(mode==='submit'){
+          toast_('Payroll submitted successfully.','success');
+          showConfirm_(newId);
+        }
+        else {
+          toast_('Draft saved.','success');
+          refreshSubmissionDataSilently_(false);
+        }
+      }).withFailureHandler(function(e){S.busy=false;if(btn){btn.disabled=false;btn.textContent=mode==='draft'?'Save Draft':'Submit Payroll';}toast_(e&&e.message?e.message:'Error saving payroll.','error');})
+      [fnName](p);
+  }
+  function showConfirm_(id){
+    S.currentDraft=defaultDraft_();S.step=0;S.answers={};
+    setContent_('<div class="p60-head"><div class="p60-title"><h2>✓ Payroll Submitted</h2><p>Your payroll has been sent for MRO review.</p></div></div><div class="p60-body"><div class="p60-success">Submitted successfully!<br><small>Confirmation ID: '+esc(id||'—')+'</small></div><div style="display:flex;gap:10px;margin-top:16px"><button id="p60GoMine">View My Submissions</button><button class="p60-btn-light" id="p60ConfBack">← Back to Dashboard</button></div></div>');
+    $('p60GoMine').onclick=function(){S.subTab='MINE';openSubmission_();};
+    $('p60ConfBack').onclick=backToDash_;
+  }
+
+  // ── MY SUBMISSIONS & APPROVED tabs ────────────────────────────────────
+  var SUB_PAGE_SIZE = 5;
+
+  function subPagerHtml_(page, totalPages){ return '<span style="font-size:.83rem;color:#555;font-weight:700">Page '+(page+1)+' of '+totalPages+'</span>'; }
+
+  function renderSubList_(approvedOnly){
+    var allRows=((S.data&&S.data.submissions)||[]).slice();
+
+    // V25: Keep My Submissions and Approved tabs separate.
+    // My Submissions shows active payrolls that still need tracking.
+    // Approved tab shows only approved payrolls.
+    if(approvedOnly){
+      allRows=allRows.filter(function(r){return up(r.status)==='APPROVED';});
+    } else {
+      allRows=allRows.filter(function(r){return up(r.status)!=='APPROVED';});
+    }
+
+    allRows.sort(function(a,b){
+      var ad=new Date(a.updated_at||a.submitted_at||a.created_at||a.pay_period_ending||0).getTime();
+      var bd=new Date(b.updated_at||b.submitted_at||b.created_at||b.pay_period_ending||0).getTime();
+      return bd-ad;
+    });
+
+    var body=$('p60Body');if(!body)return;
+    var totalAll=((S.data&&S.data.submissions)||[]).length;
+    var approvedCount=((S.data&&S.data.submissions)||[]).filter(function(r){return up(r.status)==='APPROVED';}).length;
+    var activeCount=Math.max(0,totalAll-approvedCount);
+
+    var helper='<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;flex-wrap:wrap">'
+      +'<div class="p60-muted">'+(approvedOnly?'Approved payrolls':'Active payroll submissions')+'</div>'
+      +'<div style="display:flex;gap:6px;flex-wrap:wrap">'
+      +'<span class="p60-status DRAFT" style="font-size:.72rem">Active '+esc(activeCount)+'</span>'
+      +'<span class="p60-status APPROVED" style="font-size:.72rem">Approved '+esc(approvedCount)+'</span>'
+      +'</div></div>';
+
+    if(!allRows.length){
+      body.innerHTML='<div class="p60-card"><div class="p60-card-body">'+helper+'<div class="p60-empty">'
+        +(approvedOnly?'No approved payrolls yet.':'No active payroll submissions. Approved payrolls are under the Approved tab.')
+        +'</div></div></div>';
+      return;
+    }
+    var pageKey=approvedOnly?'approvedPage':'subListPage';
+    var total=allRows.length;
+    var totalPages=Math.max(1,Math.ceil(total/SUB_PAGE_SIZE));
+    S[pageKey]=Math.min(S[pageKey]||0,totalPages-1);
+    var page=S[pageKey];
+    var rows=allRows.slice(page*SUB_PAGE_SIZE,(page+1)*SUB_PAGE_SIZE);
+
+    var pager=total>SUB_PAGE_SIZE
+      ?'<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;margin-bottom:8px">'
+        +'<button class="p60-btn-sm" data-sub-page="prev"'+(page===0?' disabled':'')+'>← Prev</button>'
+        +subPagerHtml_(page,totalPages)
+        +'<span style="font-size:.8rem;color:#888">'+Math.min((page+1)*SUB_PAGE_SIZE,total)+' of '+total+'</span>'
+        +'<button class="p60-btn-sm" data-sub-page="next"'+(page>=totalPages-1?' disabled':'')+'>Next →</button>'
+        +'</div>'
+      :'';
+
+    body.innerHTML='<div class="p60-card"><div class="p60-card-body">'+helper+pager+'<div id="p60SubList">'+rows.map(function(r){return subCardHtml_(r,false);}).join('')+'</div>'+pager+'</div></div>';
+    bindSubCards_(false);
+
+    qsa('[data-sub-page="prev"]').forEach(function(btn){
+      btn.onclick=function(){S[pageKey]=Math.max(0,(S[pageKey]||0)-1);renderSubList_(approvedOnly);window.scrollTo({top:0,behavior:'smooth'});};
+    });
+    qsa('[data-sub-page="next"]').forEach(function(btn){
+      btn.onclick=function(){S[pageKey]=Math.min(totalPages-1,(S[pageKey]||0)+1);renderSubList_(approvedOnly);window.scrollTo({top:0,behavior:'smooth'});};
+    });
+  }
+  function subCardHtml_(row,adminMode){
+    var id=row.submission_id||'';
+    var open=String(S.openId)===String(id);
+    var s=up(row.status||'DRAFT');
+    // status timeline for restaurant view
+    var timeline='';
+    if(!adminMode){
+      var stages=[
+        {key:'DRAFT',label:'Draft',done:true},
+        {key:'SUBMITTED',label:'Submitted',done:['SUBMITTED','RESUBMITTED','IN_REVIEW','CORRECTION_NEEDED','APPROVED'].indexOf(s)!==-1},
+        {key:'IN_REVIEW',label:'In Review',done:['IN_REVIEW','APPROVED'].indexOf(s)!==-1},
+        {key:'APPROVED',label:'Approved',done:s==='APPROVED'}
+      ];
+      if(Number(row.correction_count||0)>0 && ['RESUBMITTED','IN_REVIEW','APPROVED'].indexOf(s)!==-1) stages.splice(2,0,{key:'RESUBMITTED',label:'Resubmitted',done:true});
+      if(s==='CORRECTION_NEEDED') stages.splice(2,0,{key:'CORRECTION_NEEDED',label:'⚠ Correction Needed',done:true,warn:true});
+      timeline='<div class="p60-timeline">'+stages.map(function(st){
+        var cls=st.done?(st.warn?'p60-tl-warn':'p60-tl-done'):'p60-tl-pending';
+        return'<div class="p60-tl-step '+cls+'"><div class="p60-tl-dot"></div><span>'+esc(st.label)+'</span></div>';
+      }).join('<div class="p60-tl-line"></div>')+'</div>';
+    }
+    var mroNoteHtml='';
+    var activeNote=activeCorrectionNote_(row);
+    if(!adminMode&&activeNote)
+      mroNoteHtml='<div class="p60-note-box p60-note-warning" style="margin-top:10px"><b>MRO Correction Note:</b> '+esc(activeNote)+'</div>';
+    var approvedHtml=!adminMode?approvalSummaryHtml_(row):'';
+    return '<div class="p60-card" style="margin-bottom:10px">'
+      +'<div class="p60-card-top"><div>'
+      +'<strong>Restaurant '+esc(row.restaurant_number||'—')+'</strong>'
+      +'<p class="p60-muted">Week Ending: <b>'+esc(fmtDateOnly_(row.pay_period_ending)||'—')+'</b>  ·  Submitted: '+esc(fmtDate_(row.submitted_at)||'—')+'</p>'
+      +(Number(row.correction_count||0)>0?'<p class="p60-muted">Correction count: <b>'+esc(row.correction_count)+'</b></p>':'')
+      +(row.action_needed_by?'<p class="p60-muted">Waiting for: <b>'+esc(row.action_needed_by)+'</b></p>':'')
+      +(s==='CORRECTION_NEEDED'&&mroNoteHtml&&!open?'<p class="p60-muted" style="color:var(--red,#b51218)">⚠ MRO has requested corrections</p>':'')
+      +(s==='RESUBMITTED'&&!open?'<p class="p60-muted" style="color:#6d28d9">Resubmitted. Waiting for MRO review.</p>':'')
+      +(s==='APPROVED'&&!open?'<p class="p60-muted" style="color:#15803d">Approved by MRO. Finalized and locked.</p>':'')
+      +'</div>'
+      +'<div style="display:flex;align-items:center;gap:8px">'
+      +'<span class="p60-status '+esc(statusCls_(row.status))+'">'+esc(statusLabel_(row.status))+'</span>'
+      +'<button class="p60-btn-sm" data-view-id="'+esc(id)+'">'+(open?'Hide':'View Details')+'</button>'
+      +(isEditable_(s,row)?'<button class="p60-btn-sm" data-edit-id="'+esc(id)+'">'+(s==='CORRECTION_NEEDED'?'Correct Payroll':'Edit')+'</button>':'')
+      +(canRecall_(s,row)?'<button class="p60-btn-danger p60-btn-xs" data-recall-id="'+esc(id)+'">Recall</button>':'')
+      +'</div></div>'
+      +(open?'<div class="p60-card-body">'+timeline+mroNoteHtml+approvedHtml+detailReadHtml_(row,false)+historyHtml_(row)+'</div>':timeline)
+      +'</div>';
+  }
+
+  // ── REVIEW PAGE ───────────────────────────────────────────────────────
+  function renderReview_(){
+    var subs=(S.reviewData&&S.reviewData.submissions)||[];
+    var c=countStatus_(subs);
+    setContent_(
+      '<div class="p60-head"><div class="p60-title"><h2>Payroll Review</h2><p>Review, correct, approve, and search finalized payrolls.</p></div>'
+      +'<div class="p60-actions"><button class="p60-btn-light" id="p60RBack">← Dashboard</button>'
+      +'<button class="p60-btn-outline" id="p60RDash">📊 MRO Dashboard</button>'
+      +'<button id="p60RRefresh">↺ Refresh</button>'
+      +'<button class="p60-btn-outline" id="p60RExport">⬇ Export</button></div></div>'
+      +'<div class="p60-tabs">'
+      +'<button class="p60-tab'+(S.reviewTab==='INBOX'?' active':'')+'" data-rtab="INBOX">Inbox</button>'
+      +'<button class="p60-tab'+(S.reviewTab==='IN_REVIEW'?' active':'')+'" data-rtab="IN_REVIEW">In Review</button>'
+      +'<button class="p60-tab'+(S.reviewTab==='CORRECTION'?' active':'')+'" data-rtab="CORRECTION">Correction Needed</button>'
+      +'<button class="p60-tab'+(S.reviewTab==='APPROVED'?' active':'')+'" data-rtab="APPROVED">Approved Payrolls</button></div>'
+      +'<div class="p60-body">'
+      +'<div class="p60-kpi-row">'
+      +'<div class="p60-kpi"><strong>'+c.SUBMITTED+'</strong><span>New</span></div>'
+      +'<div class="p60-kpi"><strong>'+c.RESUBMITTED+'</strong><span>Resubmitted</span></div>'
+      +'<div class="p60-kpi"><strong>'+c.IN_REVIEW+'</strong><span>In Review</span></div>'
+      +'<div class="p60-kpi"><strong>'+c.CORRECTION_NEEDED+'</strong><span>Correction Needed</span></div>'
+      +'<div class="p60-kpi p60-kpi-green"><strong>'+c.APPROVED+'</strong><span>Approved Payrolls</span></div></div>'
+      // Bulk approve bar. Hidden in Approved Payrolls because approved items are view only.
+      +(S.reviewTab==='APPROVED'?'':'<div class="p60-bulk-bar" id="p60BulkBar" style="display:none">'
+      +'<span id="p60BulkCount" style="font-weight:800">0 selected</span>'
+      +'<button class="p60-btn-sm" id="p60BulkSelectAll" style="background:rgba(255,255,255,.15);color:#fff;border-color:rgba(255,255,255,.4)">☐ Select All</button>'
+      +'<button class="p60-btn-primary" id="p60BulkApprove" style="background:#0a7a3e!important;border-color:#0a7a3e!important">✓ Approve Selected</button>'
+      +'<button class="p60-btn-danger" id="p60BulkCorrection" style="background:rgba(255,255,255,.1);color:#fff;border-color:rgba(255,255,255,.4)">⚠ Request Correction</button>'
+      +'<button class="p60-btn-sm" id="p60BulkClear" style="background:rgba(255,255,255,.15);color:#fff;border-color:rgba(255,255,255,.4)">✕ Clear</button></div>')
+      +'<div class="p60-filter-row" style="grid-template-columns:160px 160px 140px 1fr">'
+      +'<select id="p60FRestaurant">'+rnOptions_(S.filters.restaurant,true)+'</select>'
+      +'<select id="p60FStatus">'      +'<option value="ALL"'+(S.filters.status==='ALL'?' selected':'')+'>All Statuses</option>'      +'<option value="SUBMITTED"'+(S.filters.status==='SUBMITTED'?' selected':'')+'>Submitted</option>'      +'<option value="RESUBMITTED"'+(S.filters.status==='RESUBMITTED'?' selected':'')+'>Resubmitted</option>'      +'<option value="INBOX"'+(S.filters.status==='INBOX'?' selected':'')+'>Inbox</option>'      +'<option value="IN_REVIEW"'+(S.filters.status==='IN_REVIEW'?' selected':'')+'>In Review</option>'      +'<option value="CORRECTION_NEEDED"'+(S.filters.status==='CORRECTION_NEEDED'?' selected':'')+'>Correction Needed</option>'      +'<option value="APPROVED"'+(S.filters.status==='APPROVED'?' selected':'')+'>Approved</option>'      +'</select>'
+      +'<select id="p60FDate"><option value="7d"'+(S.filters.dateMode==='7d'?' selected':'')+'>Last 7 Days</option><option value="month"'+(S.filters.dateMode==='month'?' selected':'')+'>This Month</option><option value="ytd"'+(S.filters.dateMode==='ytd'?' selected':'')+'>Year to Date</option><option value="all"'+(S.filters.dateMode==='all'?' selected':'')+'>All Time</option><option value="custom"'+(S.filters.dateMode==='custom'?' selected':'')+'>Custom…</option></select>'
+      +'<input id="p60FSearch" placeholder="Search…" value="'+esc(S.filters.search||'')+'"></div>'
+      +(S.filters.dateMode==='custom'?'<div style="display:flex;gap:8px;margin:4px 0 8px;align-items:center"><label style="font-size:.82rem;font-weight:700;color:#555">From</label><input type="date" id="p60FDateFrom" value="'+esc(S.filters.dateFrom||'')+'" style="height:32px;padding:4px 8px;border:1px solid #9d9d9d;border-radius:2px;font:inherit;font-size:.85rem"><label style="font-size:.82rem;font-weight:700;color:#555">To</label><input type="date" id="p60FDateTo" value="'+esc(S.filters.dateTo||'')+'" style="height:32px;padding:4px 8px;border:1px solid #9d9d9d;border-radius:2px;font:inherit;font-size:.85rem"></div>':'')
+      +'<div id="p60ReviewList"></div></div>'
+    );
+    // Set status filter FIRST so dropdown renders with correct selected option
+    if(S.reviewTab==='APPROVED')S.filters.status='APPROVED';
+    else if(S.reviewTab==='CORRECTION')S.filters.status='CORRECTION_NEEDED';
+    else if(S.reviewTab==='IN_REVIEW')S.filters.status='IN_REVIEW';
+    else if(S.reviewTab==='INBOX')S.filters.status='INBOX';
+    $('p60RBack').onclick=backToDash_;$('p60RDash').onclick=function(){openMRODash_();};$('p60RRefresh').onclick=function(){clearPayrollButtonCache_('review');S.reviewData=null;openReview_();};$('p60RExport').onclick=doExport_;
+    qsa('[data-rtab]').forEach(function(b){b.onclick=function(){S.reviewTab=b.getAttribute('data-rtab');S.selectedIds={};S.reviewPage=0;S.openId='';S.editId='';
+    // Set correct default status filter for tab
+    if(S.reviewTab==='APPROVED')S.filters.status='APPROVED';
+    else if(S.reviewTab==='CORRECTION')S.filters.status='CORRECTION_NEEDED';
+    else if(S.reviewTab==='IN_REVIEW')S.filters.status='IN_REVIEW';
+    else if(S.reviewTab==='INBOX')S.filters.status='INBOX';
+    renderReview_();};});
+    var fr=$('p60FRestaurant'),fs=$('p60FStatus'),fq=$('p60FSearch');
+    if(fr)fr.onchange=function(){S.filters.restaurant=fr.value;S.reviewPage=0;renderReviewList_();};
+    if(fs){fs.value=S.filters.status||'ALL';fs.onchange=function(){S.filters.status=fs.value;S.reviewPage=0;renderReviewList_();};}
+    if(fq)fq.oninput=function(){S.filters.search=fq.value;S.reviewPage=0;renderReviewList_();};
+    var fd=$('p60FDate');
+    if(fd){fd.value=S.filters.dateMode||'7d';fd.onchange=function(){S.filters.dateMode=fd.value;S.reviewPage=0;if(fd.value!=='custom'){S.filters.dateFrom='';S.filters.dateTo='';}renderReview_();};}
+    var fdf=$('p60FDateFrom'),fdt=$('p60FDateTo');
+    if(fdf)fdf.onchange=function(){S.filters.dateFrom=fdf.value;S.reviewPage=0;renderReviewList_();};
+    if(fdt)fdt.onchange=function(){S.filters.dateTo=fdt.value;S.reviewPage=0;renderReviewList_();};
+    renderReviewList_();
+  }
+  function countStatus_(rows){ var o={SUBMITTED:0,RESUBMITTED:0,IN_REVIEW:0,CORRECTION_NEEDED:0,APPROVED:0,RECALLED:0};rows.forEach(function(r){var s=up(r.status||'');if(o[s]!==undefined)o[s]++;});return o; }
+
+  var REV_PAGE_SIZE=15;
+
+  function payrollRowDate_(r){
+    var candidates=[
+      r.submitted_at,
+      r.submittedAt,
+      r.created_at,
+      r.createdAt,
+      r.updated_at,
+      r.updatedAt,
+      r.pay_period_ending,
+      r.payPeriodEnding
+    ];
+
+    for(var i=0;i<candidates.length;i++){
+      var v=candidates[i];
+      if(!v)continue;
+      var d=new Date(v);
+      if(!isNaN(d.getTime()))return d;
+    }
+
+    return null;
+  }
+
+  function reviewDateCutoff_(mode){var now=new Date();now.setHours(0,0,0,0);if(mode==='7d'){var d=new Date(now);d.setDate(d.getDate()-7);return d;}if(mode==='month'){return new Date(now.getFullYear(),now.getMonth(),1);}if(mode==='ytd'){return new Date(now.getFullYear(),0,1);}return null;}
+  function renderReviewList_(){
+    var list=$('p60ReviewList');if(!list)return;
+    var rows=((S.reviewData&&S.reviewData.submissions)||[]).slice();
+    var rn=S.filters.restaurant||'ALL',status=S.filters.status||'ALL',search=cl(S.filters.search).toLowerCase();
+    var dateMode=S.filters.dateMode||'7d',cutoff=reviewDateCutoff_(dateMode);
+    var dateFrom=S.filters.dateFrom?new Date(S.filters.dateFrom):null;
+    var dateTo=S.filters.dateTo?new Date(S.filters.dateTo):null;
+    if(dateTo)dateTo.setHours(23,59,59,999);
+    rows=rows.filter(function(r){
+      var okR=rn==='ALL'||String(r.restaurant_number)===rn;
+      var okS=status==='ALL'||(status==='INBOX'&&['SUBMITTED','RESUBMITTED'].indexOf(up(r.status))!==-1)||up(r.status)===status;
+      var txt=[r.restaurant_number,r.submitted_by,r.pay_period_ending,r.status].join(' ').toLowerCase();
+      var okQ=!search||txt.indexOf(search)!==-1;
+      var okD=true;
+      var sub=payrollRowDate_(r);
+      if(cutoff){okD=!!(sub&&sub>=cutoff);}
+      else if(dateMode==='custom'){if(sub&&dateFrom)okD=sub>=dateFrom;if(sub&&dateTo)okD=okD&&sub<=dateTo;}
+      return okR&&okS&&okQ&&okD;
+    });
+
+    // V21: If View moved a payroll from Inbox to In Review, keep that payroll visible and expanded right away.
+    // This prevents the card from disappearing because of filters, cache, or date range while the background save is still running.
+    if(S.openId){
+      var opened=((S.reviewData&&S.reviewData.submissions)||[]).find(function(r){
+        return String(r.submission_id||r.submissionId||'')===String(S.openId);
+      });
+      if(opened && !rows.some(function(r){return String(r.submission_id||r.submissionId||'')===String(S.openId);})){
+        var openedStatus=up(opened.status||'');
+        var tabAllowsOpen=(S.reviewTab==='IN_REVIEW'&&openedStatus==='IN_REVIEW') ||
+          (S.reviewTab==='INBOX'&&['SUBMITTED','RESUBMITTED'].indexOf(openedStatus)!==-1) ||
+          (S.reviewTab==='APPROVED'&&openedStatus==='APPROVED') ||
+          (S.reviewTab==='CORRECTION'&&openedStatus==='CORRECTION_NEEDED') ||
+          status==='ALL';
+        if(tabAllowsOpen) rows.unshift(opened);
+      }
+    }
+
+    var total=rows.length;
+    if(!total){list.innerHTML='<div class="p60-empty">No submissions match your filters.</div>';return;}
+    var totalPages=Math.max(1,Math.ceil(total/REV_PAGE_SIZE));
+    S.reviewPage=Math.min(S.reviewPage||0,totalPages-1);
+    var page=S.reviewPage;
+    var pageRows=rows.slice(page*REV_PAGE_SIZE,(page+1)*REV_PAGE_SIZE);
+    var pager=total>REV_PAGE_SIZE
+      ?'<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 2px;margin-bottom:8px">'
+        +'<button class="p60-btn-sm" id="p60RevPrev"'+(page===0?' disabled':'')+'>← Prev</button>'
+        +'<span style="font-size:.83rem;color:#555;font-weight:700">Page '+(page+1)+' of '+totalPages+' &nbsp;·&nbsp; '+(page*REV_PAGE_SIZE+1)+'–'+Math.min((page+1)*REV_PAGE_SIZE,total)+' of '+total+'</span>'
+        +'<button class="p60-btn-sm" id="p60RevNext"'+(page>=totalPages-1?' disabled':'')+'>Next →</button>'
+        +'</div>'
+      :'';
+    var heading=S.reviewTab==='APPROVED'?'<div class="p60-card" style="margin-bottom:10px"><div class="p60-card-body"><b>Approved Payrolls</b><p class="p60-muted">Finalized payrolls are view only. Use filters to search by restaurant, week ending, or submitter.</p></div></div>':'';
+    list.innerHTML=pager+heading+pageRows.map(function(r){return reviewCardHtml_(r);}).join('')+(total>REV_PAGE_SIZE?pager:'');
+    bindReviewCards_();updateBulkBar_();
+    document.querySelectorAll('#p60RevPrev').forEach(function(btn){btn.onclick=function(){S.reviewPage=Math.max(0,(S.reviewPage||0)-1);renderReviewList_();window.scrollTo({top:0,behavior:'smooth'});};});
+    document.querySelectorAll('#p60RevNext').forEach(function(btn){btn.onclick=function(){S.reviewPage=Math.min(totalPages-1,(S.reviewPage||0)+1);renderReviewList_();window.scrollTo({top:0,behavior:'smooth'});};});
+  }
+
+  function reviewCardHtml_(row){
+    var id=row.submission_id||'';
+    var s=up(row.status||'');
+    var isOpen=String(S.openId)===String(id);
+    var isEditing=String(S.editId)===String(id);
+    var isApprovedTab=S.reviewTab==='APPROVED';
+    var canAct=!isApprovedTab&&s!=='APPROVED'&&s!=='RECALLED';
+    var checked=S.selectedIds[id]?' checked':'';
+    var corrCount=Number(row.correction_count||0);
+    var tcOk=cl(row.time_card_updated||'').toLowerCase()==='yes';
+    var statHrs=cl(row.stat_hours_1_0||'');
+    var p={};try{p=JSON.parse(row.payload_json||'{}');}catch(e){}
+    var roeCount=(p.roeRows||[]).length;
+    var hireCount=(p.newHireRows||[]).length;
+    var isCorr=s==='CORRECTION_NEEDED';
+    var isNew=s==='SUBMITTED';
+    var isResub=s==='RESUBMITTED';
+
+    var cardBg=isCorr?'#fff8f0':isResub?'#f0f8ff':'#fff';
+    var cardBorder=isCorr?'border-left:4px solid #e88d07':isNew?'border-left:4px solid #0076b6':isResub?'border-left:4px solid #6d28d9':'';
+    var urgencyBadge=corrCount>=2?'<span style="background:#b51218;color:#fff;border-radius:999px;padding:1px 8px;font-size:.72rem;font-weight:900;margin-left:4px">⚠ '+corrCount+'x</span>':'';
+
+    var html='<div class="p60-card p60-review-card" id="p60RC_'+esc(id)+'" style="margin-bottom:8px;'+cardBorder+';background:'+cardBg+'">'
+      +'<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;gap:10px;flex-wrap:wrap">'
+      +'<div style="display:flex;align-items:flex-start;gap:10px;flex:1;min-width:0">'
+      +(canAct?'<input type="checkbox" class="p60-bulk-cb" data-cb-id="'+esc(id)+'"'+checked+' style="width:16px;height:16px;cursor:pointer;flex-shrink:0;margin-top:3px">':'<span style="width:16px;flex-shrink:0"></span>')
+      +'<div style="flex:1;min-width:0">'
+      +'<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:4px">'
+      +'<strong style="font-size:.95rem;color:#163a63">Restaurant '+esc(row.restaurant_number||'—')+'</strong>'
+      +urgencyBadge
+      +'<span class="p60-status '+esc(statusCls_(row.status))+'" style="font-size:.75rem">'+esc(statusLabel_(row.status))+'</span>'
+      +'</div>'
+      +'<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">'
+      +'<span style="font-size:.8rem;color:#555">📅 <b>'+esc(fmtDateOnly_(row.pay_period_ending)||'—')+'</b></span>'
+      +'<span style="color:#ddd">|</span>'
+      +'<span style="font-size:.8rem;color:#555">👤 '+esc(row.submitted_by||'—')+'</span>'
+      +'<span style="color:#ddd">|</span>'
+      +'<span style="font-size:.78rem;font-weight:700;color:'+(tcOk?'#0a7a3e':'#b51218')+'" title="Time Card Updated">'+(tcOk?'✓ TC':'✗ TC')+'</span>'
+      +(statHrs?'<span style="color:#ddd">|</span><span style="font-size:.78rem;color:#555">Stat: <b>'+esc(statHrs)+'</b></span>':'')
+      +(roeCount>0?'<span style="background:#e8f4fd;color:#0076b6;border-radius:999px;padding:1px 7px;font-size:.75rem;font-weight:700">'+roeCount+' ROE</span>':'')
+      +(hireCount>0?'<span style="background:#e8faf0;color:#0a7a3e;border-radius:999px;padding:1px 7px;font-size:.75rem;font-weight:700">'+hireCount+' hire</span>':'')
+      +(corrCount===1?'<span style="background:rgba(232,141,7,.15);color:#856404;border-radius:999px;padding:1px 7px;font-size:.75rem;font-weight:700">1 correction</span>':'')
+      +(isCorr&&row.admin_notes?'<span style="font-size:.78rem;color:#9c4000;font-style:italic;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(row.admin_notes||'')+'">📝 '+esc(String(row.admin_notes||'').slice(0,40))+(row.admin_notes&&row.admin_notes.length>40?'…':'')+'</span>':'')
+      +'</div>'
+      +'</div></div>'
+      +'<div style="display:flex;align-items:center;gap:5px;flex-shrink:0">'
+      +(!isEditing?'<button class="p60-btn-sm" data-view-id="'+esc(id)+'" style="min-width:60px">'+(isOpen?'▲ Hide':'▼ View')+'</button>':'')
+      +(canAct&&!isEditing?'<button class="p60-btn-sm p60-btn-edit-review" data-edit-review="'+esc(id)+'">✎ Edit</button>':'')
+      +(canAct&&!isEditing?'<button class="p60-btn-sm" style="background:#fff8e6;color:#9c4000;border-color:#f5c9a0" data-quick-correction="'+esc(id)+'">⚠</button>':'')
+      +(canAct&&!isEditing?'<button class="p60-btn-primary p60-btn-approve" data-quick-approve="'+esc(id)+'" style="background:#0a7a3e!important;border-color:#0a7a3e!important">✓ Approve</button>':'')
+      +'</div></div>';
+
+    if(isEditing){
+      html+=renderInlineEditor_(row);
+    } else if(isOpen){
+      html+='<div style="border-top:1px solid #e8e8e8;padding:14px">'+detailReadHtml_(row,true)+historyHtml_(row)+'</div>';
+    }
+    html+='</div>';
+    return html;
+  }
+
+  // ── INLINE EDITOR (expands inside the review card) ────────────────────
+  function renderInlineEditor_(row){
+    var id=row.submission_id||'';
+    var d=rowFromSubmission_(row);
+    var rn=d.restaurantNumber||row.restaurant_number||'';
+    var html='<div class="p60-inline-editor">'
+      // Quick action bar at top
+      +'<div class="p60-inline-actions" style="position:sticky;top:0;z-index:20">'
+      +'<span style="font-weight:800;color:var(--navy,#163a63)">Editing:</span>'
+      +'<button class="p60-btn-sm p60-ie-save-draft" data-ie-id="'+esc(id)+'">💾 Save Changes</button>'
+      +'<button class="p60-btn-primary p60-ie-approve" data-ie-id="'+esc(id)+'">✓ Save & Approve</button>'
+      +'<button class="p60-btn-danger p60-ie-correction" data-ie-id="'+esc(id)+'">⚠ Save & Request Correction</button>'
+      +'<button class="p60-btn-sm" data-cancel-edit="'+esc(id)+'">Cancel</button>'
+      +'</div>'
+      // Header fields
+      +'<div class="p60-ie-section"><div class="p60-section-label">Payroll Details</div>'
+      +'<div class="p60-grid4">'
+      +'<div class="p60-field"><label>Restaurant</label><select class="p60-ie-rn" id="p60IeRn_'+esc(id)+'">'+rnOptions_(rn,false)+'</select></div>'
+      +'<div class="p60-field"><label>Week Ending</label><input class="p60-ie-period" id="p60IePeriod_'+esc(id)+'" type="date" value="'+esc(toDateInput_(d.payPeriodEnding)||'')+'"></div>'
+      +'<div class="p60-field"><label>Time Card Updated</label><select class="p60-ie-tc" id="p60IeTc_'+esc(id)+'"><option'+(d.timeCardUpdated==='Yes'?' selected':'')+'>Yes</option><option'+(d.timeCardUpdated==='No'?' selected':'')+'>No</option></select></div>'
+      +'<div class="p60-field"><label>Stat Hours at 1.0</label><input class="p60-ie-stat" id="p60IeStat_'+esc(id)+'" type="text" value="'+esc(d.statHours||'')+'"></div>'
+      +'</div></div>';
+
+    // One section card per category
+    SECTION_ORDER.forEach(function(key){
+      var cfg=SECTIONS[key];
+      var rows=d[key]||[];
+      var sectionBody = rows.length
+        ? rowTableHtml_(key,rows)
+        : '<div class="p60-empty" style="padding:10px">No entries.</div>';
+      html+='<div class="p60-ie-section">'
+        +'<div class="p60-section-label" style="display:flex;justify-content:space-between;align-items:center">'
+        +esc(cfg.title)
+        +'<span style="font-size:.75rem;font-weight:700;color:rgba(29,36,48,.5)">'+rows.length+' entr'+(rows.length===1?'y':'ies')+'</span>'
+        +'</div>'
+        +sectionBody
+        +'</div>';
+    });
+
+    // Notes + MRO notes
+    html+='<div class="p60-ie-section"><div class="p60-section-label">Special Notes</div>'
+      +'<textarea id="p60IeNotes_'+esc(id)+'" rows="2" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #9d9d9d;border-radius:2px;font:inherit;font-size:.9rem">'+esc(d.specialNotes||'')+'</textarea></div>'
+      +'<div class="p60-ie-section"><div class="p60-section-label">MRO Notes (visible to restaurant)</div>'
+      +'<textarea id="p60IeAdminNotes_'+esc(id)+'" rows="2" placeholder="MRO correction note — visible to restaurant" style="width:100%;box-sizing:border-box;padding:6px 8px;border:2px solid #e88d07;border-radius:2px;font:inherit;font-size:.9rem;background:#fff8e6">'+esc(row.admin_notes||row.correction_notes||'')+'</textarea></div>'
+      +'</div>';
+    return html;
+  }
+
+  function collectInlineEditorPayload_(id,row){
+    var rn=cl(($('p60IeRn_'+id)||{}).value||row.restaurant_number||'');
+    var period=cl(($('p60IePeriod_'+id)||{}).value||toDateInput_(row.pay_period_ending)||'');
+    var tc=cl(($('p60IeTc_'+id)||{}).value||row.time_card_updated||'Yes');
+    var stat=cl(($('p60IeStat_'+id)||{}).value||row.stat_hours_1_0||'');
+    var notes=cl(($('p60IeNotes_'+id)||{}).value||row.special_notes||'');
+    var adminNotes=cl(($('p60IeAdminNotes_'+id)||{}).value||'');
+    var sections={};
+    SECTION_ORDER.forEach(function(key){sections[key]=collectRows_(key);});
+    return {
+      payload:{sessionToken:token_(),submissionId:id,restaurantNumber:rn,payPeriodEnding:period,timeCardUpdated:tc,statHours:stat,payrollApproval:'',specialNotes:notes,attendanceBonusRows:sections.attendanceBonusRows||[],newHireRows:sections.newHireRows||[],roeRows:sections.roeRows||[],missingTrainingRows:sections.missingTrainingRows||[],uniformDeductionRows:sections.uniformDeductionRows||[]},
+      adminNotes:adminNotes
+    };
+  }
+
+  function saveInlineEditor_(id,row,finalStatus){
+    if(S.busy)return;
+    var col=collectInlineEditorPayload_(id,row);
+    var payload=col.payload;var adminNotes=col.adminNotes;
+    if(!payload.restaurantNumber){toast_('Restaurant is required.','error');return;}
+    if(!payload.payPeriodEnding){toast_('Week ending date is required.','error');return;}
+    if(finalStatus==='CORRECTION_NEEDED'&&!adminNotes){
+      toast_('Enter MRO notes before requesting a correction.','error');
+      var ta=$('p60IeAdminNotes_'+id);
+      if(ta){ta.style.border='2px solid #b51218';ta.focus();}
+      return;
+    }
+    S.busy=true;
+    qsa('.p60-ie-save-draft,.p60-ie-approve,.p60-ie-correction').forEach(function(b){b.disabled=true;b.setAttribute('aria-busy','true');});
+    google.script.run
+      .withSuccessHandler(function(res){
+        if(!res||!res.success){
+          S.busy=false;
+          qsa('.p60-ie-save-draft,.p60-ie-approve,.p60-ie-correction').forEach(function(b){b.disabled=false;b.removeAttribute('aria-busy');});
+          toast_((res&&res.error)||'Could not save.','error');return;
+        }
+        var savedId=(res.data&&(res.data.submissionId||res.data.submission_id))||id;
+        if(!finalStatus||finalStatus==='DRAFT'){
+          S.busy=false;toast_('✓ Changes saved.','success');S.editId='';openReview_();return;
+        }
+        google.script.run
+          .withSuccessHandler(function(res2){
+            S.busy=false;
+            qsa('.p60-ie-save-draft,.p60-ie-approve,.p60-ie-correction').forEach(function(b){b.disabled=false;b.removeAttribute('aria-busy');});
+            if(!res2||!res2.success){toast_((res2&&res2.error)||'Saved but status update failed.','error');openReview_();return;}
+            clearPayrollButtonCache_('review');
+            clearPayrollButtonCache_('admin');
+            clearPayrollButtonCache_('submission');
+            toast_(finalStatus==='APPROVED'?'✓ Approved':'⚠ Correction request sent','success');
+            S.editId='';openReview_();
+          })
+          .withFailureHandler(function(e){S.busy=false;toast_(e&&e.message?e.message:'Status update failed.','error');openReview_();})
+          .updatePayrollSubmissionStatus({sessionToken:token_(),submissionId:savedId,status:finalStatus,adminNotes:adminNotes,correctionNotes:adminNotes});
+      })
+      .withFailureHandler(function(e){
+        S.busy=false;
+        qsa('.p60-ie-save-draft,.p60-ie-approve,.p60-ie-correction').forEach(function(b){b.disabled=false;b.removeAttribute('aria-busy');});
+        toast_(e&&e.message?e.message:'Could not save.','error');
+      })
+      .submitPayrollOnBehalf(payload);
+  }
+
+
+  function appendLocalPayrollTimelineV28_(timelineJson, action, note){
+    var history=[];
+    try{
+      history=JSON.parse(timelineJson||'[]');
+      if(!Array.isArray(history))history=[];
+    }catch(e){history=[];}
+    history.push({
+      at:new Date().toISOString(),
+      by:'MRO',
+      action:action||'VIEWED_BY_MRO',
+      note:note||''
+    });
+    return JSON.stringify(history);
+  }
+
+  function switchReviewTabHeaderInstantV27_(tab){
+    qsa('[data-rtab]').forEach(function(btn){
+      var active=btn.getAttribute('data-rtab')===tab;
+      btn.classList.toggle('active',active);
+    });
+    var fs=$('p60FStatus');
+    if(fs)fs.value=(tab==='IN_REVIEW'?'IN_REVIEW':tab==='INBOX'?'INBOX':tab==='APPROVED'?'APPROVED':tab==='CORRECTION'?'CORRECTION_NEEDED':'ALL');
+  }
+
+  function openInboxPayrollInstantV28_(id,row){
+    if(!row)return false;
+
+    var now=new Date().toISOString();
+
+    // Open first. Do not wait for Apps Script.
+    S.reviewTab='IN_REVIEW';
+    S.filters=S.filters||{};
+    S.filters.status='IN_REVIEW';
+    S.openId=id;
+    S.editId='';
+    S.reviewPage=0;
+    S.selectedIds={};
+
+    row.status='IN_REVIEW';
+    row.locked_by_mro='YES';
+    row.review_viewed_at=row.review_viewed_at||now;
+    row.reviewed_at=row.reviewed_at||now;
+    row.updated_at=now;
+    row.admin_viewed_status='VIEWED';
+    row.timeline_json=appendLocalPayrollTimelineV28_(row.timeline_json,'VIEWED_BY_MRO','Moved to In Review');
+
+    if(S.reviewData&&S.reviewData.submissions){
+      var found=false;
+      S.reviewData.submissions=S.reviewData.submissions.map(function(r){
+        if(String(r.submission_id||r.submissionId||'')===String(id)){
+          found=true;
+          return row;
+        }
+        return r;
+      });
+      if(!found)S.reviewData.submissions.unshift(row);
+    }
+
+    // Full local render only. This is instant because it uses existing reviewData.
+    renderReview_();
+
+    setTimeout(function(){
+      var card=document.getElementById('p60RC_'+id);
+      if(card)card.scrollIntoView({behavior:'smooth',block:'start'});
+    },0);
+
+    // Save in background after UI is already open.
+    try{
+      google.script.run
+        .withSuccessHandler(function(res){
+          if(!res||!res.success){
+            toast_((res&&res.error)||'Opened, but could not save In Review status. Refresh and try again.','error');
+            return;
+          }
+          clearPayrollButtonCache_('review');
+          clearPayrollButtonCache_('admin');
+          clearPayrollButtonCache_('submission');
+        })
+        .withFailureHandler(function(e){
+          toast_(e&&e.message?e.message:'Opened, but could not save In Review status. Refresh and try again.','error');
+        })
+        .updatePayrollSubmissionStatus({sessionToken:token_(),submissionId:id,status:'IN_REVIEW',adminNotes:'',correctionNotes:''});
+    }catch(e){}
+
+    return true;
+  }
+
+  function updateReviewRowLocalV29_(id, patch){
+    if(!S.reviewData)S.reviewData={submissions:[]};
+    S.reviewData.submissions=S.reviewData.submissions||[];
+    var found=null;
+    S.reviewData.submissions.forEach(function(r){
+      if(String(r.submission_id||r.submissionId||'')===String(id))found=r;
+    });
+    if(!found)return null;
+    Object.keys(patch||{}).forEach(function(k){found[k]=patch[k];});
+    return found;
+  }
+
+  function ensureRowInReviewLocalV29_(id,row){
+    var now=new Date().toISOString();
+    row=row||findRow_(id,true);
+    if(!row)return null;
+    row.status='IN_REVIEW';
+    row.locked_by_mro='YES';
+    row.review_viewed_at=row.review_viewed_at||now;
+    row.reviewed_at=row.reviewed_at||now;
+    row.updated_at=now;
+    row.admin_viewed_status='VIEWED';
+    row.timeline_json=appendLocalPayrollTimelineV28_(row.timeline_json,'VIEWED_BY_MRO','Moved to In Review');
+    updateReviewRowLocalV29_(id,row);
+    return row;
+  }
+
+  function saveInReviewBackgroundV29_(id, after){
+    try{
+      google.script.run
+        .withSuccessHandler(function(res){
+          if(!res||!res.success){
+            if(typeof after==='function')after(false,(res&&res.error)||'Could not save In Review status.');
+            return;
+          }
+          clearPayrollButtonCache_('review');
+          clearPayrollButtonCache_('admin');
+          clearPayrollButtonCache_('submission');
+          if(typeof after==='function')after(true,'');
+        })
+        .withFailureHandler(function(e){
+          if(typeof after==='function')after(false,e&&e.message?e.message:'Could not save In Review status.');
+        })
+        .updatePayrollSubmissionStatus({sessionToken:token_(),submissionId:id,status:'IN_REVIEW',adminNotes:'',correctionNotes:''});
+    }catch(e){ if(typeof after==='function')after(false,e&&e.message?e.message:String(e)); }
+  }
+
+  function editReviewPayrollInstantV29_(id){
+    var row=findRow_(id,true);
+    if(!row)return;
+    if(['SUBMITTED','RESUBMITTED'].indexOf(up(row.status))!==-1){
+      ensureRowInReviewLocalV29_(id,row);
+      saveInReviewBackgroundV29_(id);
+    }
+    S.reviewTab='IN_REVIEW';
+    S.filters.status='IN_REVIEW';
+    S.openId='';
+    S.editId=id;
+    S.reviewPage=0;
+    renderReview_();
+    setTimeout(function(){var card=$('p60RC_'+id);if(card)card.scrollIntoView({behavior:'smooth',block:'start'});},0);
+  }
+
+  function approveReviewPayrollInstantV29_(id){
+    if(!id||S.busy)return;
+    var row=findRow_(id,true);
+    if(!row)return;
+
+    S.busy=true;
+    var now=new Date().toISOString();
+    var oldStatus=row.status||'';
+    row.status='APPROVED';
+    row.approved_at=now;
+    row.updated_at=now;
+    row.timeline_json=appendLocalPayrollTimelineV28_(row.timeline_json,'APPROVED_BY_MRO','Approved');
+    updateReviewRowLocalV29_(id,row);
+    toast_('Approving…','info');
+    renderReviewList_();
+
+    function approveOnServer_(){
+      google.script.run
+        .withSuccessHandler(function(res){
+          S.busy=false;
+          if(!res||!res.success){
+            updateReviewRowLocalV29_(id,{status:oldStatus||'IN_REVIEW'});
+            toast_((res&&res.error)||'Could not approve.','error');
+            renderReviewList_();
+            return;
+          }
+          clearPayrollButtonCache_('review');
+          clearPayrollButtonCache_('admin');
+          clearPayrollButtonCache_('submission');
+          delete S.selectedIds[id];
+          toast_('Approved successfully.','success');
+          renderReviewList_();
+          updateBulkBar_();
+        })
+        .withFailureHandler(function(e){
+          S.busy=false;
+          updateReviewRowLocalV29_(id,{status:oldStatus||'IN_REVIEW'});
+          toast_(e&&e.message?e.message:'Could not approve.','error');
+          renderReviewList_();
+        })
+        .updatePayrollSubmissionStatus({sessionToken:token_(),submissionId:id,status:'APPROVED',adminNotes:'',correctionNotes:''});
+    }
+
+    if(['SUBMITTED','RESUBMITTED'].indexOf(up(oldStatus))!==-1){
+      saveInReviewBackgroundV29_(id,function(){ approveOnServer_(); });
+    } else {
+      approveOnServer_();
+    }
+  }
+
+  function bindReviewCards_(){
+    // View toggle. Inbox View opens the payroll instantly in In Review before server save finishes.
+    qsa('[data-view-id]').forEach(function(b){b.onclick=function(event){
+      if(event)event.preventDefault();
+      var id=b.getAttribute('data-view-id');
+      var wasOpen=String(S.openId)===String(id);
+      var row=findRow_(id,true);
+
+      if(wasOpen){
+        S.openId='';
+        renderReviewList_();
+        return;
+      }
+
+      if(row&&['SUBMITTED','RESUBMITTED'].indexOf(up(row.status))!==-1){
+        openInboxPayrollInstantV28_(id,row);
+        return;
+      }
+
+      S.openId=id;
+      S.editId='';
+      renderReviewList_();
+    };});
+
+    // Edit must work right away after Inbox View opens. Do not wait for refresh.
+    qsa('[data-edit-review]').forEach(function(b){b.onclick=function(event){
+      if(event)event.preventDefault();
+      editReviewPayrollInstantV29_(b.getAttribute('data-edit-review'));
+    };});
+
+    // Quick approve must also work while the background In Review save is still running.
+    qsa('[data-quick-approve]').forEach(function(b){b.onclick=function(event){
+      if(event)event.preventDefault();
+      approveReviewPayrollInstantV29_(b.getAttribute('data-quick-approve'));
+    };});
+
+    // Quick correction button opens edit mode and focuses MRO notes.
+    qsa('[data-quick-correction]').forEach(function(b){b.onclick=function(event){
+      if(event)event.preventDefault();
+      var id=b.getAttribute('data-quick-correction');
+      editReviewPayrollInstantV29_(id);
+      setTimeout(function(){var ta=$('p60IeAdminNotes_'+id);if(ta){ta.focus();ta.scrollIntoView({behavior:'smooth',block:'center'});}},120);
+    };});
+
+    // Cancel inline edit
+    qsa('[data-cancel-edit]').forEach(function(b){b.onclick=function(){S.editId='';renderReviewList_();};});
+
+    // Inline editor save buttons
+    qsa('.p60-ie-save-draft').forEach(function(b){b.onclick=function(){
+      var id=b.getAttribute('data-ie-id');var row=findRow_(id,true);if(row)saveInlineEditor_(id,row,'DRAFT');
+    };});
+    qsa('.p60-ie-approve').forEach(function(b){b.onclick=function(){
+      var id=b.getAttribute('data-ie-id');var row=findRow_(id,true);
+      appConfirmV413('Save all changes and approve?', function(){ if(row)saveInlineEditor_(id,row,'APPROVED'); }, null, { title:'Approve Payroll', okText:'Approve' });
+      return;
+    };});
+    qsa('.p60-ie-correction').forEach(function(b){b.onclick=function(){
+      var id=b.getAttribute('data-ie-id');var row=findRow_(id,true);if(row)saveInlineEditor_(id,row,'CORRECTION_NEEDED');
+    };});
+
+    // Correction via read-only notes textarea
+    qsa('[data-correction-id]').forEach(function(b){b.onclick=function(){
+      var id=b.getAttribute('data-correction-id');
+      var notesEl=$('adminNotes_'+id);var note=notesEl?cl(notesEl.value):'';
+      if(!note){toast_('Enter MRO notes before requesting a correction.','error');return;}
+      doStatusUpdate_(id,'CORRECTION_NEEDED',note);
+    };});
+
+    // Bulk select checkboxes
+    qsa('.p60-bulk-cb').forEach(function(cb){cb.onchange=function(){
+      var id=cb.getAttribute('data-cb-id');
+      if(cb.checked)S.selectedIds[id]=true; else delete S.selectedIds[id];
+      updateBulkBar_();
+    };cb.checked=!!S.selectedIds[cb.getAttribute('data-cb-id')];});
+
+    // Add/remove row in open inline editor
+    qsa('[data-add-row]').forEach(function(b){b.onclick=function(){
+      var key=b.getAttribute('data-add-row');
+      var tbl=$('payrollTable_'+key);if(!tbl)return;
+      var editId=S.editId;var row=findRow_(editId,true);if(!row)return;
+      var d=rowFromSubmission_(row);var rn=d.restaurantNumber||'';
+      var tbody=tbl.querySelector('tbody');
+      if(tbody){var tr=document.createElement('tr');tr.innerHTML=rowHtml_(key,{},rn).replace(/^<tr>/,'').replace(/<\/tr>$/,'');tbody.appendChild(tr);bindRowButtons_(tbody);bindRoeApplicationSelects_(tbody);}
+    };});
+    qsa('[data-remove-row]').forEach(function(b){b.onclick=function(){b.closest('tr').remove();};});
+  }
+
+  function bindRowButtons_(container){
+    qsa('[data-remove-row]',container).forEach(function(b){b.onclick=function(){b.closest('tr').remove();};});
+  }
+
+  function updateBulkBar_(){
+    var bar=$('p60BulkBar');if(!bar)return;
+    var count=Object.keys(S.selectedIds).length;
+    bar.style.display=count>0?'flex':'none';
+    var cnt=$('p60BulkCount');
+    if(cnt)cnt.textContent=count+' selected';
+    var btn=$('p60BulkApprove');
+    if(btn){
+      btn.textContent='✓ Approve '+count;
+      btn.onclick=function(){doBulkApprove_(Object.keys(S.selectedIds));};
+    }
+    var selAll=$('p60BulkSelectAll');
+    if(selAll)selAll.onclick=function(){
+      var rows=((S.reviewData&&S.reviewData.submissions)||[]);
+      var rn=S.filters.restaurant||'ALL',status=S.filters.status||'ALL';
+      rows.filter(function(r){
+        var okR=rn==='ALL'||String(r.restaurant_number)===rn;
+        var s=up(r.status||'');
+        var okS=s!=='APPROVED'&&s!=='RECALLED';
+        return okR&&okS;
+      }).forEach(function(r){S.selectedIds[r.submission_id||'']=true;});
+      renderReviewList_();
+    };
+    var corrBtn=$('p60BulkCorrection');
+    if(corrBtn)corrBtn.onclick=function(){
+      var ids=Object.keys(S.selectedIds);
+      if(!ids.length)return;
+      appPromptV413('Enter correction note for all selected payrolls:', '', function(note){
+        note=cl(note||'');
+        if(!note){toast_('Enter a correction note.','error');return;}
+        S.busy=true;
+        var done=0;
+        function next(){
+          if(done>=ids.length){S.busy=false;S.selectedIds={};toast_(ids.length+' correction request'+(ids.length===1?'':'s')+' sent.','success');openReview_();return;}
+          var id=ids[done++];
+          google.script.run
+            .withSuccessHandler(function(){next();})
+            .withFailureHandler(function(){next();})
+            .updatePayrollSubmissionStatus({sessionToken:token_(),submissionId:id,status:'CORRECTION_NEEDED',adminNotes:note,correctionNotes:note});
+        }
+        next();
+      }, { title:'Correction Note', okText:'Send Correction' });
+    };
+    var clr=$('p60BulkClear');
+    if(clr)clr.onclick=function(){S.selectedIds={};renderReviewList_();};
+  }
+
+  function doBulkApprove_(ids){
+    if(!ids.length)return;
+    if(S.busy)return;
+    S.busy=true;
+    var btn=$('p60BulkApprove');
+    if(btn){btn.disabled=true;btn.textContent='Approving '+ids.length+'…';}
+    // Optimistic update all at once
+    ids.forEach(function(id){
+      if(S.reviewData&&S.reviewData.submissions){
+        var idx=S.reviewData.submissions.findIndex(function(r){return String(r.submission_id||'')===String(id);});
+        if(idx!==-1)S.reviewData.submissions[idx].status='APPROVED';
+      }
+    });
+    // Single batched server call
+    google.script.run
+      .withSuccessHandler(function(res){
+        S.busy=false;
+        if(btn){btn.disabled=false;btn.textContent='✓ Approve Selected';}
+        if(!res||!res.success){
+          toast_((res&&res.error)||'Bulk approve failed.','error');
+          openReview_();return;
+        }
+        var saved=res.data&&typeof res.data.count==='number'?res.data.count:ids.length;
+        toast_('✓ '+saved+' payroll'+(saved===1?'':'s')+' approved.','success');
+        S.selectedIds={};
+        renderReviewList_();
+        updateBulkBar_();
+      })
+      .withFailureHandler(function(e){
+        S.busy=false;
+        if(btn){btn.disabled=false;btn.textContent='✓ Approve Selected';}
+        toast_(e&&e.message?e.message:'Bulk approve failed.','error');
+        openReview_();
+      })
+      .updatePayrollSubmissionStatus({sessionToken:token_(),submissionIds:ids,status:'APPROVED',adminNotes:'Bulk approved',correctionNotes:''});
+  }
+
+  function doStatusUpdate_(id,status,notes){
+    if(!id)return;
+    google.script.run
+      .withSuccessHandler(function(res){
+        if(!res||!res.success){toast_((res&&res.error)||'Could not update.','error');return;}
+        toast_('Status updated to '+statusLabel_(status)+'.','success');S.openId='';openReview_();
+      }).withFailureHandler(function(e){toast_(e&&e.message?e.message:'Error.','error');})
+      .updatePayrollSubmissionStatus({sessionToken:token_(),submissionId:id,status:status,adminNotes:notes,correctionNotes:notes});
+  }
+  function doReturnToRestaurant_(id){
+    if(!id||S.busy)return;
+    S.busy=true;
+    google.script.run
+      .withSuccessHandler(function(res){
+        S.busy=false;
+        if(!res||!res.success){toast_((res&&res.error)||'Could not return payroll.','error');return;}
+        clearPayrollButtonCache_('review');
+        clearPayrollButtonCache_('admin');
+        clearPayrollButtonCache_('submission');
+        toast_('Payroll returned to restaurant.','success');
+        S.openId='';
+        S.editId='';
+        openReview_();
+      })
+      .withFailureHandler(function(e){
+        S.busy=false;
+        toast_(e&&e.message?e.message:'Could not return payroll.','error');
+      })
+      .returnPayrollSubmissionToRestaurant({sessionToken:token_(),submissionId:id});
+  }
+  function doExport_(){
+    toast_('Exporting…','info');
+    google.script.run
+      .withSuccessHandler(function(res){if(!res||!res.success){toast_((res&&res.error)||'Export failed.','error');return;}adminOpenExport_(res.data||{});toast_((res.data&&res.data.message)||'Exported.','success');})
+      .withFailureHandler(function(e){toast_(e&&e.message?e.message:'Export failed.','error');})
+      .exportPayrollSummary({sessionToken:token_(),filterStatus:S.filters.status==='ALL'?'':S.filters.status,filterPeriod:''});
+  }
+
+  // ── Shared detail read view ───────────────────────────────────────────
+  function detailReadHtml_(row,adminMode){
+    var p={};
+    if(row&&row.payload&&typeof row.payload==='object') p=row.payload;
+    else { try{p=JSON.parse((row&&row.payload_json)||'{}');}catch(e){p={};} }
+    var html='<div class="p60-section-label">Payroll Check</div>'
+      +'<table class="p60-read-table" style="margin-bottom:10px"><tbody>'
+      +'<tr><th>Time Card Updated</th><td>'+esc(row.time_card_updated||'—')+'</td><th>Stat Hours</th><td>'+esc(row.stat_hours_1_0||'—')+'</td></tr>'
+      +'<tr><th>Submitted</th><td>'+esc(fmtDateTime_(row.submitted_at))+'</td><th>Last Updated</th><td>'+esc(fmtDateTime_(row.updated_at))+'</td></tr>'
+      +(row.reviewed_by?'<tr><th>Reviewed By</th><td>'+esc(row.reviewed_by)+'</td><th>Approved</th><td>'+esc(fmtDate_(row.approved_at))+'</td></tr>':'')
+      +(Number(row.correction_count||0)>0?'<tr><th>Correction Count</th><td>'+esc(row.correction_count)+'</td><th>Last Correction</th><td>'+esc(fmtDateTime_(row.correction_requested_at))+'</td></tr>':'')
+      +'</tbody></table>';
+    SECTION_ORDER.forEach(function(key){html+=readSectionHtml_(SECTIONS[key].title,p[key]||[],key);});
+    html+='<div class="p60-section-label">Special Notes</div><div class="p60-note-box">'+esc(row.special_notes||'No notes')+'</div>';
+    if(adminMode){
+      var isApproved = up(row.status) === 'APPROVED';
+      html+='<div class="p60-section-label">MRO Notes</div>';
+      if(isApproved){
+        html+='<div class="p60-note-box p60-note-success">'+esc(row.admin_notes||row.correction_notes||'Approved and finalized.')+'</div>'
+          +'<p class="p60-muted" style="margin-top:8px;color:#15803d">Approved payroll is view only. Correction and approval actions are hidden.</p>';
+      } else {
+        html+='<textarea id="adminNotes_'+esc(row.submission_id||'')+'" rows="3" style="width:100%;box-sizing:border-box;padding:8px;border:1px solid rgba(22,58,99,.18);border-radius:8px;font:inherit">'+esc(row.admin_notes||row.correction_notes||'')+'</textarea>'
+          +'<div style="margin-top:8px;display:flex;gap:8px"><button class="p60-btn-danger" data-correction-id="'+esc(row.submission_id||'')+'">⚠ Send Correction Request</button></div>';
+      }
+    }
+    return html;
+  }
+  // Human-readable column name map for read view
+  var COL_LABELS = {
+    employeeName:         'Employee',
+    terminationDate:      'Last Day of Work',
+    roeApplicationId:     'ROE Application ID',
+    roeId:                'ROE ID',
+    reasonForSeparation:  'Reason for Separation',
+    legalStatus:          'Legal Status',
+    healthBenefits:       'Health Benefits',
+    stationChampion:      'Station Champion',
+    employeeId:           'Employee ID',
+    attendancePercentage: 'Attendance %',
+    startDate:            'Start Date',
+    type:                 'Type',
+    missingHours:         'Missing Hours',
+    trainingHours:        'Training Hours',
+    reason:               'Reason',
+    item:                 'Item',
+    amount:               'Amount ($)'
+  };
+  // Keys to hide in read view (internal/duplicate fields)
+  var COL_HIDE = ['roeId','firstName','lastName','employeeId','roeId'];
+
+  function colLabel_(k){
+    if(COL_LABELS[k]) return COL_LABELS[k];
+    return k.replace(/([A-Z])/g,' $1').replace(/_/g,' ').trim()
+      .replace(/\w/g,function(c){return c.toUpperCase();});
+  }
+
+  function cleanReadValueV21_(value){
+    var s=cl(value);
+    if(!s)return '';
+    var normalized=s.toLowerCase().replace(/\s+/g,' ').trim();
+    if(normalized==='select employee')return '';
+    if(normalized.indexOf('select employee')!==-1)return '';
+    if(normalized==='select')return '';
+    if(normalized==='employee name')return '';
+    if(normalized==='employee')return '';
+    if(normalized==='—'||normalized==='-'||normalized==='n/a')return '';
+    return s;
+  }
+
+  function readRowHasDataV21_(row,key){
+    row=row||{};
+    if(key==='attendanceBonusRows'){
+      return !!(cleanReadValueV21_(row.employeeName)||cleanReadValueV21_(row.employeeId)||cleanReadValueV21_(row.attendancePercentage));
+    }
+    if(key==='newHireRows'){
+      return !!(cleanReadValueV21_(row.employeeName)||cleanReadValueV21_(row.employeeId)||cleanReadValueV21_(row.startDate));
+    }
+    if(key==='roeRows'){
+      return !!(cleanReadValueV21_(row.employeeName)||cleanReadValueV21_(row.roeApplicationId)||cleanReadValueV21_(row.terminationDate)||cleanReadValueV21_(row.reasonForSeparation));
+    }
+    if(key==='missingTrainingRows'){
+      return !!(cleanReadValueV21_(row.employeeName)||cleanReadValueV21_(row.employeeId)||cleanReadValueV21_(row.missingHours)||cleanReadValueV21_(row.trainingHours)||cleanReadValueV21_(row.reason));
+    }
+    if(key==='uniformDeductionRows'){
+      return !!(cleanReadValueV21_(row.employeeName)||cleanReadValueV21_(row.employeeId)||cleanReadValueV21_(row.item)||cleanReadValueV21_(row.amount)||cleanReadValueV21_(row.reason));
+    }
+    return Object.keys(row).some(function(k){return cleanReadValueV21_(row[k]);});
+  }
+
+  function readSectionHtml_(title,rows,key){
+    rows=(rows||[]).filter(function(r){return readRowHasDataV21_(r,key);});
+
+    // Do not treat default dropdown values as real entries.
+    // Example: New Hire row with only Type = New Hire must still show No entries.
+    if(key==='newHireRows'){
+      rows=rows.filter(function(r){
+        return !!(cleanReadValueV21_(r.employeeName)||cleanReadValueV21_(r.employeeId)||cleanReadValueV21_(r.startDate));
+      });
+    }
+
+    // Build key list only from rows with real values.
+    var keys=[];
+    rows.forEach(function(r){
+      Object.keys(r||{}).forEach(function(k){
+        if(COL_HIDE.indexOf(k)!==-1)return;
+        if(keys.indexOf(k)!==-1)return;
+        var hasValue=rows.some(function(row){return !!cleanReadValueV21_(row[k]);});
+        if(hasValue)keys.push(k);
+      });
+    });
+
+    // If no real rows or no real columns, show No entries only.
+    if(!rows.length || !keys.length){
+      return '<div class="p60-section-label">'+esc(title.toUpperCase())+'</div><div class="p60-empty">No entries.</div>';
+    }
+
+    // Extra guard: if the only visible column is employeeName but it has no real employee value, show No entries.
+    if(keys.length===1 && keys[0]==='employeeName'){
+      var hasEmployee=rows.some(function(r){return !!cleanReadValueV21_(r.employeeName);});
+      if(!hasEmployee){
+        return '<div class="p60-section-label">'+esc(title.toUpperCase())+'</div><div class="p60-empty">No entries.</div>';
+      }
+    }
+
+    var emp=keys.indexOf('employeeName');
+    if(emp!==-1){keys.splice(emp,1);keys.unshift('employeeName');}
+
+    var roeIdIdx=keys.indexOf('roeId');
+    var roeAppIdx=keys.indexOf('roeApplicationId');
+    if(roeIdIdx!==-1 && roeAppIdx!==-1) keys.splice(roeIdIdx,1);
+
+    var html='<div class="p60-section-label">'+esc(title.toUpperCase())+'</div><div class="p60-table-wrap"><table class="p60-read-table"><thead><tr>';
+    keys.forEach(function(k){html+='<th>'+esc(colLabel_(k))+'</th>';});
+    html+='</tr></thead><tbody>';
+    rows.forEach(function(r){
+      html+='<tr>';
+      keys.forEach(function(k){
+        var val=cleanReadValueV21_(r[k]);
+        if(k==='terminationDate'||k==='startDate') val=fmtDateOnly_(val)||val;
+        html+='<td>'+esc(val||'—')+'</td>';
+      });
+      html+='</tr>';
+    });
+    return html+'</tbody></table></div>';
+  }
+
+
+  // ── Recall (restaurant) ───────────────────────────────────────────────
+  function bindSubCards_(adminMode){
+    qsa('[data-view-id]').forEach(function(b){b.onclick=function(){
+      var id=b.getAttribute('data-view-id');
+      var wasOpen=String(S.openId)===String(id);
+      S.openId=wasOpen?'':id;
+      if(adminMode){
+        renderReviewList_();
+      } else {
+        // Restaurant user view — just expand/collapse, never change status.
+        // Status only moves to IN_REVIEW when MRO opens from the Review inbox.
+        renderSubList_(S.subTab==='APPROVED');
+      }
+    };});
+    qsa('[data-edit-id]').forEach(function(b){b.onclick=function(){
+      var id=b.getAttribute('data-edit-id');
+      var row=findRow_(id,false)||findRow_(id,true);
+      if(!row||!isEditable_(row.status,row)){toast_('This payroll cannot be edited in its current status.','error');return;}
+      S.currentDraft=rowFromSubmission_(row);S.step=1;S.subTab='FORM';
+      SECTION_ORDER.forEach(function(k){S.answers[k]=(S.currentDraft[k]||[]).length?'YES':'';});
+      if(!S.data||!(S.data.restaurants&&S.data.restaurants.length)){
+        showPage_();setContent_('<div class="p60-head"><div class="p60-title"><h2>Loading…</h2></div></div><div class="p60-body"><div class="p60-empty">Loading…</div></div>');
+        google.script.run.withSuccessHandler(function(res){if(!res||!res.success){toast_((res&&res.error)||'Error.','error');return;}S.data=res.data||{};renderSubmission_();}).withFailureHandler(function(e){toast_(e&&e.message?e.message:'Error.','error');}).getPayrollSubmissionWorkspaceData(token_());
+      } else renderSubmission_();
+    };});
+    qsa('[data-recall-id]').forEach(function(b){b.onclick=function(){
+      var id=b.getAttribute('data-recall-id');
+      appConfirmV413('Recall this payroll? It will be withdrawn and can be resubmitted.', function(){
+        google.script.run
+          .withSuccessHandler(function(res){if(!res||!res.success){toast_((res&&res.error)||'Could not recall.','error');return;}toast_('Payroll recalled.','success');openSubmission_();})
+          .withFailureHandler(function(e){toast_(e&&e.message?e.message:'Error.','error');})
+          .recallPayrollSubmission({sessionToken:token_(),submissionId:id,reason:'Recalled by submitter'});
+      }, null, { title:'Recall Payroll', okText:'Recall', danger:true });
+      return;
+    };});
+  }
+  function findRow_(id,admin){
+    var list=admin?(S.reviewData&&S.reviewData.submissions||[]):(S.data&&S.data.submissions||[]);
+    return list.find(function(r){return String(r.submission_id||r.submissionId||'')===String(id);})||null;
+  }
+
+  // ── MRO DASHBOARD ─────────────────────────────────────────────────────
+  function renderMRODash_(){
+    var d=S.dashData||{};var c=d.counts||{};var total=d.totalRestaurants||0;
+    // progressCount = restaurants that submitted for the latest pay period (any status)
+    var submitted=typeof d.progressCount==='number'?d.progressCount:(c.SUBMITTED||0)+(c.IN_REVIEW||0);
+    var pct=total?Math.round(submitted/total*100):0;
+    var dm=S.dashDateMode||'7d';
+    var dmLabels={'7d':'Last 7 Days','month':'This Month','ytd':'Year to Date','all':'All Time'};
+    // recentApprovals already filtered server-side by dateMode
+    var recentApprovals=d.recentApprovals||[];
+    setContent_(
+      '<div class="p60-head"><div class="p60-title"><h2>📊 MRO Payroll Dashboard</h2>'
+      +'<p>Period: '+esc(d.latestPeriod||'—')+'  ·  '+esc(d.generatedAt?new Date(d.generatedAt).toLocaleTimeString():'')+'</p></div>'
+      +'<div class="p60-actions"><button class="p60-btn-light" id="p60DashBack">← Dashboard</button>'
+      +'<button class="p60-btn-outline" id="p60DashToReview">Review Queue</button>'
+      +'<button id="p60DashRefresh">↺ Refresh</button></div></div>'
+      +'<div style="background:#eef4fa;border-bottom:1px solid #d0dde8;padding:8px 14px;display:flex;align-items:center;gap:10px">'
+      +'<span style="font-size:.82rem;font-weight:700;color:#555">Date Range:</span>'
+      +'<select id="p60DashDateFilter" style="height:32px;padding:4px 10px;border:1px solid #9d9d9d;border-radius:2px;font:inherit;font-size:.85rem;background:#fff">'
+      +'<option value="7d"'+(dm==='7d'?' selected':'')+'>Last 7 Days</option>'
+      +'<option value="month"'+(dm==='month'?' selected':'')+'>This Month</option>'
+      +'<option value="ytd"'+(dm==='ytd'?' selected':'')+'>Year to Date</option>'
+      +'<option value="all"'+(dm==='all'?' selected':'')+'>All Time</option>'
+      +'</select>'
+      +'<span style="font-size:.82rem;color:#888">Showing: <b>'+esc(dmLabels[dm]||dm)+'</b></span>'
+      +'</div>'
+      +'<div class="p60-body">'
+      +'<div class="p60-kpi-row">'
+      +'<div class="p60-kpi"><strong>'+(c.SUBMITTED||0)+'</strong><span>Awaiting Review</span></div>'
+      +'<div class="p60-kpi"><strong>'+(c.IN_REVIEW||0)+'</strong><span>In Review</span></div>'
+      +'<div class="p60-kpi"><strong>'+(c.CORRECTION_NEEDED||0)+'</strong><span>Correction Needed</span></div>'
+      +'<div class="p60-kpi p60-kpi-green"><strong>'+(c.APPROVED||0)+'</strong><span>Approved</span></div>'
+      +'<div class="p60-kpi"><strong>'+(c.RECALLED||0)+'</strong><span>Recalled</span></div>'
+      +'</div>'
+      +'<div class="p60-card" style="margin-bottom:14px"><h3>Submission Progress — '+esc(d.latestPeriod||'Current Period')+'</h3><div class="p60-card-body">'
+      +'<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px"><div class="p60-progress-bar"><div class="p60-progress-fill" style="width:'+pct+'%"></div></div>'
+      +'<span style="font-weight:900;color:var(--navy,#163a63);white-space:nowrap">'+submitted+' / '+total+' ('+pct+'%)</span></div>'
+      +missingRestaurantsHtml_(d.missingRestaurants||[])+'</div></div>'
+      +'<div class="p60-dash-cols">'
+      +'<div class="p60-card"><h3>⚠ Needs Attention</h3><div class="p60-card-body">'
+      +(!(d.needsAttention&&d.needsAttention.length)?'<div class="p60-empty">All up to date.</div>':
+        (d.needsAttention||[]).map(function(r){return'<div class="p60-attention-row"><div><strong>Restaurant '+esc(r.restaurant_number||'—')+'</strong><p class="p60-muted">Week '+esc(r.pay_period_ending||'—')+'  ·  <span class="p60-status '+esc(statusCls_(r.status))+'">'+esc(statusLabel_(r.status))+'</span></p></div><button class="p60-btn-sm" data-goto-id="'+esc(r.submission_id||'')+'">Review</button></div>';}).join(''))
+      +'</div></div>'
+      +'<div class="p60-card"><h3>✓ Ready to Approve</h3><div class="p60-card-body">'
+      +(!(d.pendingFinalApproval&&d.pendingFinalApproval.length)?'<div class="p60-empty">No submissions pending final approval.</div>':
+        (d.pendingFinalApproval||[]).map(function(r){var id=r.submission_id||'';return'<div class="p60-attention-row"><div><strong>Restaurant '+esc(r.restaurant_number||'—')+'</strong><p class="p60-muted">Week '+esc(r.pay_period_ending||'—')+'  ·  By '+esc(r.submitted_by||'—')+'</p></div><div style="display:flex;gap:6px"><button class="p60-btn-primary p60-dash-approve" data-quick-approve="'+esc(id)+'">Approve</button><button class="p60-btn-sm" data-goto-id="'+esc(id)+'">View</button></div></div>';}).join(''))
+      +'</div></div></div>'
+      +'<div class="p60-card" style="margin-top:14px"><h3>Recently Approved — '+esc(dmLabels[dm]||dm)+'</h3><div class="p60-card-body">'+(recentApprovals.length?'<table class="p60-read-table"><thead><tr><th>Restaurant</th><th>Week Ending</th><th>Submitted By</th><th>Approved At</th></tr></thead><tbody>'+recentApprovals.map(function(r){return'<tr><td>'+esc(r.restaurant_number||'—')+'</td><td>'+esc(fmtDateOnly_(r.pay_period_ending)||'—')+'</td><td>'+esc(r.submitted_by||'—')+'</td><td>'+esc(fmtDate_(r.approved_at))+'</td></tr>';}).join('')+'</tbody></table>':'<div class="p60-empty">No approvals in this period.</div>')+'</div></div>'
+      +'</div>'
+    );
+    $('p60DashBack').onclick=backToDash_;$('p60DashToReview').onclick=openReview_;$('p60DashRefresh').onclick=function(){openMRODash_(null,true);};
+    var ddf=$('p60DashDateFilter');
+    if(ddf)ddf.onchange=function(){openMRODash_(ddf.value);};
+    qsa('[data-goto-id]').forEach(function(b){b.onclick=function(){S.reviewTab='INBOX';S.filters.status='ALL';S.openId=b.getAttribute('data-goto-id');openReview_();};});
+    qsa('.p60-dash-approve,[data-quick-approve]').forEach(function(b){b.onclick=function(){
+      var id=b.getAttribute('data-quick-approve');
+      appConfirmV413('Approve this payroll?', function(){
+        var rowEl = typeof findPortalRowV414 === 'function' ? findPortalRowV414(b) : null;
+        if (typeof setPortalRowSavingV414 === 'function') setPortalRowSavingV414(rowEl, true, 'Saving...');
+        b.disabled=true;b.textContent='Approving…';
+        google.script.run.withSuccessHandler(function(res){if(!res||!res.success){toast_((res&&res.error)||'Error.','error');openMRODash_();return;}toast_('Approved.','success');openMRODash_();}).withFailureHandler(function(e){if (typeof setPortalRowSavingV414 === 'function') setPortalRowSavingV414(rowEl, false);toast_(e&&e.message?e.message:'Error.','error');openMRODash_();}).updatePayrollSubmissionStatus({sessionToken:token_(),submissionId:id,status:'APPROVED',adminNotes:'Approved via MRO Dashboard',correctionNotes:''});
+      }, null, { title:'Approve Payroll', okText:'Approve' });
+      return;
+    };});
+  }
+  function missingRestaurantsHtml_(list){
+    if(!list.length)return'<p style="color:#0f8f57;font-weight:700;margin:0">✓ All restaurants have submitted for this period.</p>';
+    return'<p style="font-weight:700;color:var(--red,#b51218);margin:0 0 8px">'+list.length+' restaurant'+(list.length===1?'':'s')+' have not yet submitted:</p><div style="display:flex;flex-wrap:wrap;gap:6px">'+list.map(function(r){return'<span class="p60-chip-missing">'+esc(r.restaurantNumber+(r.restaurantName?' – '+r.restaurantName:''))+'</span>';}).join('')+'</div>';
+  }
+
+
+  // ── Styles ────────────────────────────────────────────────────────────
+  function injectStyles_(){
+    if($('p60Styles'))return;
+    var s=document.createElement('style');s.id='p60Styles';
+    s.textContent=
+      // ── Page shell ──────────────────────────────────────────────────────
+      '#payrollPageV360{width:100%;font-family:Arial,sans-serif;color:#111;background:#f4f4f4;border:1px solid #bdbdbd;box-shadow:0 12px 32px rgba(15,23,42,.1);}'+
+
+      // ── Header bar ──────────────────────────────────────────────────────
+      '.p60-head{height:56px;background:#0076b6;color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 18px;box-sizing:border-box;flex-wrap:wrap;gap:8px;}'+
+      '.p60-title h2{font-size:24px;font-weight:400;margin:0;line-height:56px;color:#fff;}'+
+      '.p60-title p{display:none;}'+
+      '.p60-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}'+
+
+      // ── Buttons ─────────────────────────────────────────────────────────
+      '#payrollPageV360 .p60-btn-primary,#payrollPageV360 .p60-actions button{height:36px;padding:0 14px!important;border-radius:3px!important;font-weight:700;cursor:pointer;font-size:.88rem;border:1px solid #0076b6!important;background:#0076b6!important;color:#fff!important;box-shadow:none!important;text-shadow:none!important;}'+
+      '#payrollPageV360 .p60-btn-primary:hover{background:#005f99!important;border-color:#005f99!important;}'+
+      '.p60-actions button{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.55);color:#fff;}'+
+      '.p60-actions button:hover{background:rgba(255,255,255,.25);}'+
+      '.p60-btn-light{background:#fff!important;color:#0076b6!important;border-color:#fff!important;}'+
+      '.p60-btn-outline{background:transparent!important;border-color:rgba(255,255,255,.6)!important;}'+
+      '.p60-btn-sm{height:32px;min-width:80px;padding:0 10px;border:1px solid #8c8c8c;background:#f7f7f7;color:#111;border-radius:2px;font-weight:700;cursor:pointer;font-size:.83rem;}'+
+      '.p60-btn-sm:hover{background:#e8e8e8;}.p60-btn-sm:disabled{opacity:.5;cursor:default;}'+
+      '.p60-btn-danger{height:32px;padding:0 10px;border:1px solid #b51218;background:#fff;color:#b51218;border-radius:2px;font-weight:700;cursor:pointer;font-size:.83rem;}'+
+      '.p60-btn-danger:hover{background:#fff0f0;}'+
+      '.p60-btn-xs{height:26px;padding:0 8px;font-size:.75rem;}'+
+
+      '.p60-admin-action-cell{width:210px;min-width:210px;white-space:nowrap;}'+
+      '.p60-admin-actions{display:flex;align-items:center;gap:8px;flex-wrap:nowrap;}'+
+      '.p60-admin-actions .p60-btn-sm,.p60-admin-actions .p60-done-btn{height:34px;min-width:92px;white-space:nowrap;}'+
+      '.p60-admin-actions .p60-done-btn[disabled]{background:#d8e8dc!important;color:#287a3e!important;border-color:#b8d6c2!important;cursor:not-allowed;}'+
+      '.p60-summary-list{display:grid;gap:8px;margin-bottom:10px;}'+
+      '.p60-summary-item{display:grid;grid-template-columns:repeat(2,minmax(180px,1fr));gap:8px 18px;border:1px solid #d9e3ec;background:#fff;padding:10px;}'+
+      '.p60-summary-pair{display:grid;grid-template-columns:150px 1fr;gap:10px;align-items:start;font-size:.9rem;}'+
+      '.p60-summary-pair span{font-weight:800;color:#555;}.p60-summary-pair strong{font-weight:500;color:#111;word-break:break-word;}'+
+      '#payrollPageV360 .p60-btn-approve{background:#0a7a3e!important;border-color:#0a7a3e!important;color:#fff!important;}'+
+      '.p60-btn-edit-review{background:#f7f7f7!important;color:#111!important;border-color:#8c8c8c!important;}'+
+
+      // ── Tabs ────────────────────────────────────────────────────────────
+      '.p60-tabs{height:54px;display:flex;align-items:stretch;background:#e5e5e5;border-bottom:1px solid #bdbdbd;overflow-x:auto;gap:0;}'+
+      '.p60-tab{min-width:180px;height:54px;border:0;border-right:1px solid #c8c8c8;background:#e5e5e5;color:#111;font-size:15px;font-weight:800;cursor:pointer;padding:0 18px;white-space:nowrap;}'+
+      '.p60-tab.active{background:#fff;border-bottom:3px solid #0076b6;color:#111;}'+'.p60-tab-badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;border-radius:999px;padding:0 5px;font-size:.72rem;font-weight:900;background:rgba(181,18,24,.15);color:#b51218;margin-left:5px;}'+
+      '.p60-admin-tabs{border-bottom:1px solid #d8d8d8;margin-bottom:12px;height:auto;background:transparent;}'+
+      '.p60-admin-tabs .p60-tab{height:40px;min-width:140px;background:#f2f2f2;border:1px solid #d8d8d8;margin-right:4px;border-radius:3px 3px 0 0;}'+
+      '.p60-admin-tabs .p60-tab.active{background:#fff;border-bottom:2px solid #0076b6;}'+
+
+      // ── Body & Cards ────────────────────────────────────────────────────
+      '.p60-body{padding:14px;background:#f4f4f4;}'+
+      '.p60-card{background:#fff;border:1px solid #d8d8d8;margin-bottom:12px;}'+
+      '.p60-card h3{margin:0;padding:10px 14px;font-size:.95rem;font-weight:800;color:#0076b6;border-bottom:1px solid #d8d8d8;background:#f2f6f9;}'+
+      '.p60-card-body{padding:14px;}'+
+      '.p60-card-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:10px 14px;flex-wrap:wrap;}'+
+
+      // ── KPI strip ───────────────────────────────────────────────────────
+      '.p60-kpi-row{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:14px;}'+
+      '.p60-kpi{background:#fff;border:1px solid #d8d8d8;padding:12px 14px;}'+
+      '.p60-kpi strong{display:block;font-size:2rem;color:#0076b6;font-weight:900;line-height:1;}'+
+      '.p60-kpi span{font-size:.75rem;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.05em;}'+
+      '.p60-kpi-green strong{color:#0a7a3e;}'+
+
+      // ── Bulk approve bar ────────────────────────────────────────────────
+      '.p60-bulk-bar{background:#163a63;color:#fff;padding:10px 14px;margin-bottom:10px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;}'+
+      '.p60-bulk-bar span{font-weight:800;font-size:.9rem;}'+
+
+      // ── Progress bar ────────────────────────────────────────────────────
+      '.p60-progress-bar{flex:1;height:12px;background:#e0e0e0;border:1px solid #ccc;}'+
+      '.p60-progress-fill{height:100%;background:#0076b6;transition:width .4s;}'+
+
+      '.p60-admin-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;background:#eef6ff;border:1px solid #d4e5f5;padding:8px 12px;margin:8px 0 0;box-sizing:border-box}'+
+      '.p60-admin-brand-cards{display:grid;grid-template-columns:repeat(2,minmax(220px,1fr));gap:10px;margin:10px 0}'+
+      '.p60-admin-brand-card{background:#fff;border:1px solid #d8d8d8;padding:12px 14px;box-sizing:border-box}'+
+      '.p60-admin-brand-card strong{display:block;color:#0076b6;font-size:28px;line-height:1}'+
+      '.p60-admin-brand-card span{display:block;margin-top:6px;font-weight:800;text-transform:uppercase;font-size:.78rem;color:#444}'+
+      '.p60-admin-week-head{display:flex;align-items:center;justify-content:space-between;gap:14px;background:#f2f8fc;border:1px solid #d8e9f5;padding:10px 14px;margin-bottom:12px}'+
+      '.p60-admin-week-head h3{margin:0;color:#0076b6;font-size:1.05rem}'+
+      '.p60-admin-progress{display:flex;align-items:center;gap:8px;min-width:160px}'+
+      '.p60-admin-progress div{flex:1;height:10px;background:#ddd;border:1px solid #c9c9c9;position:relative}'+
+      '.p60-admin-progress span{display:block;height:100%;background:#0076b6}'+
+      '.p60-admin-progress b{font-size:.82rem;color:#0076b6}'+
+      '.p60-admin-pill-warn{display:inline-flex;min-width:24px;height:24px;align-items:center;justify-content:center;border-radius:999px;background:#ffe8e8;color:#b51218;font-weight:800}'+
+
+      // ── Dashboard two-col ───────────────────────────────────────────────
+      '.p60-dash-cols{display:grid;grid-template-columns:1fr 1fr;gap:12px;}'+
+      '.p60-attention-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px solid #ebebeb;}'+
+      '.p60-attention-row:last-child{border-bottom:0;}'+
+      '.p60-chip-missing{background:#fff0f0;color:#b51218;border:1px solid #f5c0c0;padding:3px 10px;font-size:.8rem;font-weight:700;}'+
+
+      // ── Review card ─────────────────────────────────────────────────────
+      '.p60-review-card{transition:box-shadow .15s,background .15s;}'+'.p60-review-card:hover{background:#fafcff;box-shadow:0 2px 8px rgba(22,58,99,.1);}'+
+
+      // ── Inline editor ───────────────────────────────────────────────────
+      '.p60-inline-editor{border-top:2px solid #0076b6;background:#f9fbfd;}'+
+      '.p60-inline-actions{display:flex;align-items:center;gap:8px;padding:10px 14px;background:#eef4fa;border-bottom:1px solid #d0dde8;flex-wrap:wrap;}'+
+      '.p60-ie-section{padding:12px 14px;border-bottom:1px solid #e8e8e8;}'+
+      '.p60-ie-section:last-child{border-bottom:0;}'+
+
+      // ── Form fields ─────────────────────────────────────────────────────
+      '.p60-grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:10px 0;}'+
+      '.p60-span2{grid-column:span 2;}'+
+      '.p60-field{display:flex;flex-direction:column;gap:4px;}'+
+      '.p60-field label{font-size:.8rem;font-weight:700;color:#222;}'+
+      '.p60-field input,.p60-field select,.p60-field textarea{width:100%;min-height:34px;padding:6px 8px;border:1px solid #9d9d9d;background:#fff;font:inherit;font-size:.9rem;box-sizing:border-box;border-radius:2px;}'+
+      '.p60-field input:focus,.p60-field select:focus{outline:2px solid #0076b6;border-color:#0076b6;}'+
+
+      // ── Wizard progress ─────────────────────────────────────────────────
+      '.p60-progress{display:flex;align-items:center;gap:6px;padding:10px 14px;border-bottom:1px solid #e0e0e0;overflow-x:auto;background:#f7f7f7;}'+
+      '.p60-dot{min-width:24px;height:24px;border-radius:999px;border:1px solid #aaa;background:#fff;color:#666;display:flex;align-items:center;justify-content:center;font-size:.72rem;font-weight:900;}'+
+      '.p60-dot.active{background:#0076b6;color:#fff;border-color:#0076b6;}'+
+      '.p60-dot.done{background:#d4edda;color:#155724;border-color:#86efac;}'+
+      '.p60-line{min-width:16px;height:2px;background:#d8d8d8;}'+
+      '.p60-slide-title{font-size:1.05rem;font-weight:800;color:#163a63;margin:0 0 12px;}'+
+      '.p60-nav{display:flex;justify-content:space-between;align-items:center;gap:10px;border-top:1px solid #e0e0e0;padding-top:12px;margin-top:12px;flex-wrap:wrap;}'+
+      '.p60-back-bar{display:flex;gap:8px;padding:8px 0;}'+
+      '.p60-question-card{text-align:center;padding:20px;max-width:520px;margin:0 auto;}'+
+      '.p60-question-card h3{font-size:1.2rem;color:#163a63;margin:0 0 6px;}'+
+      '.p60-question-card p{color:#555;margin:0 0 16px;}'+
+      '.p60-choice-row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;}'+
+      '.p60-step-pill{background:#e8f4fd;color:#0076b6;border:1px solid #b3d9f5;padding:3px 10px;font-size:.75rem;font-weight:800;margin-bottom:10px;display:inline-block;}'+
+      '.p60-start{text-align:center;padding:32px 20px;}'+
+      '.p60-start-icon{font-size:2.5rem;margin-bottom:10px;}'+
+      '.p60-start h3{font-size:1.3rem;color:#163a63;margin:0 0 8px;}'+
+      '.p60-start p{color:#555;margin:0 0 18px;}'+
+      '.p60-section-fields{margin-top:12px;}'+
+
+      // ── Tables ──────────────────────────────────────────────────────────
+      '.p60-table-wrap{overflow-x:auto;}'+
+      '.p60-row-table{width:100%;border-collapse:collapse;font-size:.85rem;}'+
+      '.p60-row-table th{background:#ebebeb;border:1px solid #cfcfcf;padding:7px 8px;font-weight:700;color:#333;font-size:.78rem;text-align:left;}'+
+      '.p60-row-table td{border:1px solid #ddd;padding:5px 6px;background:#fff;}'+
+      '.p60-row-table input,.p60-row-table select{width:100%;border:1px solid #bbb;border-radius:2px;padding:5px 6px;box-sizing:border-box;font:inherit;font-size:.85rem;min-height:30px;}'+
+      '.p60-read-table{width:100%;border-collapse:collapse;font-size:.88rem;margin:8px 0;}'+
+      '.p60-read-table th{background:#ebebeb;border:1px solid #cfcfcf;padding:7px 8px;font-weight:700;color:#333;font-size:.78rem;text-align:left;}'+
+      '.p60-read-table td{border:1px solid #ddd;padding:7px 8px;background:#fff;}'+
+
+      // ── Status badges ───────────────────────────────────────────────────
+      '.p60-status{display:inline-flex;align-items:center;border-radius:999px;padding:3px 9px;font-size:.76rem;font-weight:900;background:#e9f2ff;color:#075a9c;border:1px solid #b9d7ff;}'+
+      '.p60-status.APPROVED{background:#d4edda;color:#155724;border-color:#b8ddc2;}'+
+      '.p60-status.SUBMITTED{background:#cce5ff;color:#004085;border-color:#b8d4f5;}'+
+      '.p60-status.IN-REVIEW,.p60-status.VIEWED{background:#fff3cd;color:#856404;border-color:#ffe08a;}'+
+      '.p60-status.CORRECTION-NEEDED{background:#fff0e6;color:#9c4000;border-color:#f5c9a0;}'+
+      '.p60-status.DRAFT{background:#f0f0f0;color:#555;border-color:#ccc;}'+
+      '.p60-status.RECALLED{background:#f0f0f0;color:#888;border-color:#ccc;}'+
+
+      // ── Misc ────────────────────────────────────────────────────────────
+      '.p60-muted{margin:2px 0 0;color:#666;font-size:.84rem;}'+
+      '.p60-roe-card-fade{transition:opacity .3s,transform .3s;}'+'.p60-empty{padding:16px;text-align:center;color:#888;background:#fafafa;border:1px solid #e8e8e8;font-size:.9rem;}'+
+      '.p60-section-label{font-weight:800;font-size:.78rem;color:#0076b6;text-transform:uppercase;letter-spacing:.06em;margin:12px 0 6px;padding-bottom:5px;border-bottom:2px solid #d8e8f5;}'+
+      '.p60-note-box{background:#f7f9fc;border:1px solid #d8e4ef;padding:9px 12px;font-size:.9rem;}'+
+      '.p60-note-warning{background:#fff8f0;border-color:#f5c9a0;color:#9c4000;font-weight:700;}'+
+      '.p60-note-success{background:#f0faf4;border-color:#b8ddc2;color:#155724;}'+
+      '.p60-confirm{background:#fff8e6;border:1px solid #f5dba0;color:#7a5200;padding:10px 12px;font-weight:700;margin:10px 0;}'+
+      '.p60-history{display:grid;gap:6px;margin-top:8px;}'+
+      '.p60-history-item{border:1px solid #e0e0e0;padding:7px 10px;background:#fff;font-size:.88rem;}'+
+      '.p60-history-item span{float:right;color:#888;font-size:.78rem;}'+
+      '.p60-success{background:#d4edda;border:1px solid #b8ddc2;color:#155724;padding:14px;font-weight:900;font-size:1rem;}'+
+
+      // ── Status timeline ─────────────────────────────────────────────────
+      '.p60-timeline{display:flex;align-items:center;padding:10px 14px;background:#f7f7f7;border-top:1px solid #e8e8e8;flex-wrap:wrap;gap:0;}'+
+      '.p60-tl-step{display:flex;flex-direction:column;align-items:center;gap:3px;min-width:72px;}'+
+      '.p60-tl-dot{width:12px;height:12px;border-radius:999px;border:2px solid #ccc;background:#fff;}'+
+      '.p60-tl-step span{font-size:.7rem;font-weight:700;color:#999;text-align:center;white-space:nowrap;}'+
+      '.p60-tl-done .p60-tl-dot{background:#155724;border-color:#155724;}.p60-tl-done span{color:#155724;}'+
+      '.p60-tl-warn .p60-tl-dot{background:#e88d07;border-color:#e88d07;}.p60-tl-warn span{color:#9c4000;}'+
+      '.p60-tl-line{flex:1;height:2px;background:#d8d8d8;min-width:16px;}'+
+
+      // ── Filters ─────────────────────────────────────────────────────────
+      '.p60-filter-row{display:grid;grid-template-columns:180px 180px 1fr;gap:8px;margin-bottom:12px;}'+
+      '.p60-filter-row select,.p60-filter-row input{min-height:34px;padding:6px 8px;border:1px solid #9d9d9d;background:#fff;font:inherit;font-size:.88rem;border-radius:2px;}'+
+
+      // ── Payroll Admin ROE compact layout ───────────────────────────────
+      '.p60-roe-table{table-layout:fixed;font-size:.84rem;}'+
+      '.p60-roe-table th,.p60-roe-table td{padding:6px 8px;vertical-align:middle;}'+
+      '.p60-roe-table th:nth-child(1),.p60-roe-table td:nth-child(1){width:210px;}'+
+      '.p60-roe-table th:nth-child(2),.p60-roe-table td:nth-child(2){width:120px;}'+
+      '.p60-roe-table th:nth-child(3),.p60-roe-table td:nth-child(3){width:110px;}'+
+      '.p60-roe-table th:nth-child(4),.p60-roe-table td:nth-child(4){width:120px;}'+
+      '.p60-roe-table th:nth-child(5),.p60-roe-table td:nth-child(5){width:95px;}'+
+      '.p60-roe-table th:nth-child(6),.p60-roe-table td:nth-child(6){width:150px;}'+
+      '.p60-roe-table th:nth-child(7),.p60-roe-table td:nth-child(7){width:210px;}'+
+      '.p60-roe-id{font-size:.78rem;white-space:nowrap;}'+
+      '.p60-roe-actions{display:flex;gap:5px;align-items:center;flex-wrap:nowrap;}'+
+      '.p60-roe-action-cell{white-space:nowrap;}'+
+      '.p60-roe-detail-row td{background:#fff!important;padding:8px 10px!important;}'+
+      '.p60-roe-detail-card{border:1px solid #cfd8e3;background:#fbfdff;padding:12px;}'+
+      '.p60-roe-detail-head{display:flex;justify-content:space-between;gap:10px;align-items:center;border-bottom:1px solid #dbe7f3;padding-bottom:8px;margin-bottom:10px;color:#0076b6;}'+
+      '.p60-roe-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(220px,1fr));gap:8px 18px;}'+
+      '.p60-roe-detail-item{display:grid;grid-template-columns:150px 1fr;gap:10px;align-items:center;background:#fff;border:1px solid #e5edf5;padding:7px 9px;}'+
+      '.p60-roe-detail-item span{font-size:.76rem;font-weight:800;color:#555;text-transform:uppercase;letter-spacing:.03em;}'+
+      '.p60-roe-detail-item strong{font-size:.9rem;font-weight:700;color:#111;word-break:break-word;}'+
+      '.p60-roe-correction{margin:10px 0;display:grid;gap:5px;}'+
+      '.p60-roe-correction label{font-size:.78rem;font-weight:800;color:#555;}'+
+      '.p60-roe-correction textarea{min-height:54px;border:1px solid #bbb;padding:8px;font:inherit;font-size:.86rem;width:100%;box-sizing:border-box;}'+
+      '#payrollPageV360 button[aria-busy="true"]{opacity:.7;cursor:wait;}'+
+
+      // ── Responsive ──────────────────────────────────────────────────────
+      '@media(max-width:900px){.p60-kpi-row{grid-template-columns:repeat(3,1fr);}.p60-grid4{grid-template-columns:1fr 1fr;}.p60-dash-cols{grid-template-columns:1fr;}.p60-filter-row{grid-template-columns:1fr;}.p60-head{height:auto;padding:10px 14px;}}'+
+      '@media(max-width:640px){.p60-kpi-row{grid-template-columns:repeat(2,1fr);}.p60-grid4{grid-template-columns:1fr;}.p60-row-table{min-width:580px;}.p60-timeline{overflow-x:auto;}}';
+    document.head.appendChild(s);
+  }
+
+  // ── Entry points ──────────────────────────────────────────────────────
+  window.cleanupPayrollModuleV360_ = cleanupUI_;
+  window.cleanupPayrollModuleV350_ = cleanupUI_;
+  window.cleanupPayrollModuleV348_ = cleanupUI_;
+  window.openPayrollSubmissionPageV360_ = openSubmission_;
+  window.openPayrollReviewPageV360_     = openReview_;
+  window.openPayrollAdminPageV360_      = openPayrollAdmin_;
+  window.openMROPayrollDashboard_       = openMRODash_;
+  window.openPayrollSubmissionPageV340_ = openSubmission_;
+  window.openPayrollReviewPageV340_     = openReview_;
+  window.openPayrollSubmissionPageV342_ = openSubmission_;
+  window.openPayrollReviewPageV342_     = openReview_;
+  window.openPayrollSubmissionPageV350_ = openSubmission_;
+  window.openPayrollReviewPageV350_     = openReview_;
+  window.openPayrollAdminPageV365_      = openPayrollAdmin_;
+
+  if(!window.__p60CleanupBound){
+    window.__p60CleanupBound=true;
+    document.addEventListener('click',function(e){
+      var t=e.target&&e.target.closest?e.target.closest('[data-role-action-key],[data-action-key],[data-key]'):null;
+      if(!t)return;
+      var k=up(t.getAttribute('data-role-action-key')||t.getAttribute('data-action-key')||t.getAttribute('data-key')||'');
+      if(k && k.indexOf('PAYROLL') === -1) window.setTimeout(cleanupUI_,0);
+    },false);
+  }
+})();
+</script>

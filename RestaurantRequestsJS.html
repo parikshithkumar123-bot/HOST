@@ -1,0 +1,781 @@
+<script>
+// Restaurant Requests module split from ClientJS.
+// Keep function names unchanged for safe routing.
+
+(function restaurantRequestCleanV251() {
+  var rrState = window.restaurantRequestReceiverState || {
+    tab: 'HIRING',
+    data: null,
+    dataLoadedAt: 0,
+    openKey: '',
+    saving: false,
+    lastKnownTimestamp: '0',
+    filters: { restaurant: 'ALL', status: 'ACTIVE', search: '', limit: '10', type: 'ALL' },
+    page: 1
+  };
+  window.restaurantRequestReceiverState = rrState;
+  rrState.page = parseInt(rrState.page || 1, 10) || 1;
+  rrState.filters = rrState.filters || { restaurant: 'ALL', status: 'ACTIVE', search: '', limit: '10', type: 'ALL' };
+  rrState.filters.limit = String(rrState.filters.limit || '10');
+  var rrPollInterval_ = null;
+
+  function byId(id) { return document.getElementById(id); }
+  function clean(value) { return String(value == null ? '' : value).replace(/\s+/g, ' ').trim(); }
+  function lower(value) { return clean(value).toLowerCase(); }
+  function esc(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, function(ch) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch];
+    });
+  }
+  function attr(value) { return esc(value).replace(/`/g, '&#096;'); }
+  function cssKey(value) {
+    var text = String(value || '');
+    if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(text);
+    return text.replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+  }
+  function token_() {
+    try { if (typeof getSessionToken_ === 'function') return getSessionToken_(); } catch (error) {}
+    try { return sessionStorage.getItem('portalSessionToken') || ''; } catch (error2) {}
+    return '';
+  }
+  function notify(message, type) {
+    if (typeof showToast === 'function') showToast(message, type || 'info');
+    else if (typeof appAlertV413 === 'function') appAlertV413(message, type || 'info'); else console.log(message);
+  }
+  function getAny(row, keys) {
+    if (!row) return '';
+    for (var i = 0; i < keys.length; i++) {
+      var key = keys[i];
+      if (row[key] !== undefined && row[key] !== null && clean(row[key]) !== '') return row[key];
+    }
+    return '';
+  }
+  function formatDateTime(value) {
+    if (!value) return '-';
+    var date = new Date(value);
+    if (isNaN(date.getTime())) return clean(value) || '-';
+    return date.toLocaleString();
+  }
+  function normalizeStatus(value) {
+    var text = clean(value) || 'New Request';
+    var upper = text.toUpperCase().replace(/_/g, ' ');
+    if (upper === 'NEW' || upper === 'OPEN') return 'New Request';
+    if (upper === 'VIEWED') return 'Viewed';
+    if (upper === 'IN REVIEW' || upper === 'WORKING') return 'In Review';
+    if (upper === 'HIRING COMPLETE') return 'Hiring Complete';
+    if (upper === 'COMPLETED' || upper === 'COMPLETE') return 'Completed';
+    if (upper === 'RECEIVED') return 'Received';
+    return text;
+  }
+  function isCompleted(value) {
+    var status = normalizeStatus(value).toUpperCase();
+    return status === 'COMPLETED' || status === 'HIRING COMPLETE' || status === 'RECEIVED';
+  }
+  function serverStatus(status, source) {
+    status = normalizeStatus(status);
+    if (source === 'HIRING' && status === 'Completed') return 'HIRING_COMPLETE';
+    if (source === 'HIRING' && status === 'Hiring Complete') return 'HIRING_COMPLETE';
+    if (status === 'New Request') return 'NEW';
+    if (status === 'Received') return 'Received';
+    return status.toUpperCase().replace(/\s+/g, '_');
+  }
+
+  function restaurantsFromData() {
+    var data = rrState.data || {};
+    var list = [];
+    if (Array.isArray(data.restaurants)) list = list.concat(data.restaurants);
+    if (window.state && window.state.adminTools && Array.isArray(window.state.adminTools.restaurants)) {
+      list = list.concat(window.state.adminTools.restaurants);
+    }
+    var seen = {};
+    return list.map(function(r) {
+      var number = clean(getAny(r, ['restaurant_number','restaurantNumber','restaurantCode','restaurant_code','number','code','Restaurant Number','Restaurant'])) || clean(r);
+      var id = clean(getAny(r, ['restaurant_id','restaurantId','id','restaurantCode','restaurant_code'])) || number;
+      var name = clean(getAny(r, ['restaurant_name','restaurantName','name','Restaurant Name'])) || '';
+      return { id: id, number: number, name: name };
+    }).filter(function(r) {
+      if (!r.number || seen[r.number]) return false;
+      seen[r.number] = true;
+      return true;
+    }).sort(function(a, b) { return a.number.localeCompare(b.number, undefined, { numeric: true }); });
+  }
+  function restaurantNumber(row) {
+    var number = clean(getAny(row, [
+      'restaurant_number','restaurantNumber','restaurantCode','restaurant_code','restaurant','Restaurant Number','assignedRestaurant','assigned_restaurant'
+    ]));
+    if (number) return number;
+    var rid = clean(getAny(row, ['restaurant_id','restaurantId','restaurantID','Restaurant ID']));
+    if (!rid) return '-';
+    var found = restaurantsFromData().find(function(r) { return r.id === rid || r.number === rid; });
+    return found ? found.number : rid;
+  }
+  function requestId(row) {
+    return clean(getAny(row, ['request_id','requestId','id','hire_id','hireId'])) || '';
+  }
+  function currentStatus(row) {
+    return normalizeStatus(getAny(row, ['status','current_status','currentStatus','request_status','requestStatus']));
+  }
+  function createdAt(row) {
+    return getAny(row, ['created_at','createdAt','submittedAt','submitted_at','timestamp','Timestamp','date','requestDate']);
+  }
+  function typeLabel(row) {
+    if (row.source === 'HIRING') return 'Hiring Request';
+    var type = clean(getAny(row, ['request_type','requestType','type'])).toUpperCase();
+    if (type.indexOf('JOB') !== -1 || type.indexOf('LETTER') !== -1) return 'Job Letter';
+    if (type.indexOf('SUPPLY') !== -1 || type.indexOf('SUPPLIES') !== -1) return 'Office Supplies';
+    return clean(getAny(row, ['request_type','requestType','type'])) || 'Admin Request';
+  }
+  function relatedSummary(row) {
+    if (row.source === 'HIRING') {
+      var position = clean(getAny(row, ['position','required_position','requiredPosition','applied_for_role']));
+      var count = clean(getAny(row, ['headcount','count','qty']));
+      return position + (count ? ' x ' + count : '');
+    }
+    return clean(getAny(row, ['employee_name','employeeName','team_member_name','teamMemberName','subject','title','item','supplyItem','supply_item'])) || '-';
+  }
+  function issuerNotes(row) {
+    return clean(getAny(row, ['issuer_notes','issuerNotes','reason','business_reason','businessReason','details','request_details','requestDetails','notes','Other Notes'])) || '-';
+  }
+  function adminNotes(row) {
+    return clean(getAny(row, ['admin_notes','adminNotes','hr_notes','hrNotes','management_notes','managementNotes'])) || '';
+  }
+  function quantity(row) {
+    return clean(getAny(row, ['quantity','qty','received_quantity','receivedQuantity'])) || '';
+  }
+  function history(row) {
+    var h = getAny(row, ['status_history','statusHistory','history']);
+    if (Array.isArray(h)) return h;
+    if (typeof h === 'string' && h.trim()) {
+      try {
+        var parsed = JSON.parse(h);
+        if (Array.isArray(parsed)) return parsed;
+      } catch (error) {}
+      return [{ at: '', by: '', status: '', note: h }];
+    }
+    return [];
+  }
+
+  function allRows() {
+    var data = rrState.data || {};
+    var hiring = (data.hiringRequests || data.hiring || []).map(function(row) {
+      var copy = Object.assign({}, row);
+      copy.source = 'HIRING';
+      copy.key = 'HIRING:' + requestId(copy);
+      return copy;
+    });
+    var admin = (data.adminRequests || data.requestsAdmin || data.admin || []).map(function(row) {
+      var copy = Object.assign({}, row);
+      copy.source = 'ADMIN';
+      copy.key = 'ADMIN:' + requestId(copy);
+      return copy;
+    });
+    return hiring.concat(admin).filter(function(row) { return requestId(row); });
+  }
+  function tabRows() {
+    var rows = allRows();
+    if (rrState.tab === 'HIRING') return rows.filter(function(r) { return r.source === 'HIRING' && !isCompleted(currentStatus(r)); });
+    if (rrState.tab === 'ADMIN') return rows.filter(function(r) { return r.source === 'ADMIN' && !isCompleted(currentStatus(r)); });
+    return rows.filter(function(r) { return isCompleted(currentStatus(r)); });
+  }
+  function filteredRows() {
+    var f = rrState.filters || {};
+    var rows = tabRows();
+    if (f.restaurant && f.restaurant !== 'ALL') rows = rows.filter(function(r) { return restaurantNumber(r) === f.restaurant; });
+    if (f.type && f.type !== 'ALL') rows = rows.filter(function(r) {
+      return String(clean(getAny(r, ['request_type','requestType','type'])) || '').toUpperCase() === f.type;
+    });
+    if (f.status && f.status !== 'ALL' && f.status !== 'ACTIVE') rows = rows.filter(function(r) {
+      if (f.status === 'Waiting Admin Action') return pendingActionRr(r) === 'Admin Action Needed';
+      if (f.status === 'Waiting Restaurant Action') return pendingActionRr(r) === 'Waiting Restaurant';
+      return normalizeStatus(currentStatus(r)) === f.status;
+    });
+    var search = lower(f.search);
+    if (search) {
+      rows = rows.filter(function(r) {
+        return [requestId(r), restaurantNumber(r), typeLabel(r), relatedSummary(r), issuerNotes(r), currentStatus(r), pendingActionRr(r)].join(' ').toLowerCase().indexOf(search) !== -1;
+      });
+    }
+    rows.sort(function(a, b) { return new Date(createdAt(b) || 0) - new Date(createdAt(a) || 0); });
+    return rows;
+  }
+
+  function injectStyle() {
+    if (byId('restaurantRequestCleanStyleV252')) return;
+    var style = document.createElement('style');
+    style.id = 'restaurantRequestCleanStyleV252';
+    style.textContent =
+      '.rrc-page{width:100%;min-height:calc(100vh - 130px);background:#f4f4f4;border:1px solid #bdbdbd;box-shadow:0 12px 32px rgba(15,23,42,.12);font-family:Arial,sans-serif;color:#111}' +
+      '.rrc-titlebar{height:56px;background:#0076b6;color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 18px;box-sizing:border-box}' +
+      '.rrc-titlebar h3{font-size:24px;line-height:56px;font-weight:400;margin:0}' +
+      '.rrc-back{height:34px;border:1px solid rgba(255,255,255,.65);background:rgba(255,255,255,.14);color:#fff;border-radius:3px;padding:0 14px;font-weight:700;cursor:pointer}' +
+      '.rrc-tabs{height:54px;display:flex;background:#e5e5e5;border-bottom:1px solid #bdbdbd;overflow:hidden}' +
+      '.rrc-tab{width:220px;min-width:220px;height:54px;border:0;border-right:1px solid #c8c8c8;background:#e5e5e5;color:#111;font-size:16px;font-weight:800;cursor:pointer;box-sizing:border-box}' +
+      '.rrc-tab.active{background:#fff;border-bottom:3px solid #0076b6}' +
+      '.rrc-content{padding:14px;box-sizing:border-box}' +
+      '.rrc-section{background:#fff;border:1px solid #d8d8d8;margin-bottom:14px}' +
+      '.rrc-filter{display:grid;grid-template-columns:150px 150px 1fr 120px 86px;gap:8px;padding:10px;background:#f7f7f7;border-bottom:1px solid #ddd;align-items:center}' +
+      '.rrc-input,.rrc-select,.rrc-textarea{width:100%;min-height:32px;border:1px solid #9d9d9d;background:#fff;padding:5px 8px;font:inherit;border-radius:2px;box-sizing:border-box}' +
+      '.rrc-textarea{min-height:70px;resize:vertical}' +
+      '.rrc-btn{height:32px;min-width:72px;border:1px solid #8c8c8c;background:#f7f7f7;color:#111;border-radius:2px;font-weight:700;cursor:pointer;padding:0 10px}' +
+      '.rrc-btn.primary{background:#0076b6;border-color:#0076b6;color:#fff}' +
+      '.rrc-table-wrap{overflow:auto;max-height:560px}' +
+      '.rrc-table{width:100%;border-collapse:collapse;font-size:.86rem}' +
+      '.rrc-table th{position:sticky;top:0;background:#ebebeb;border:1px solid #cfcfcf;text-align:left;padding:6px;z-index:1}' +
+      '.rrc-table td{border:1px solid #ddd;padding:5px 6px;vertical-align:middle}' +
+      '.rrc-note-readonly{max-width:420px;white-space:normal;color:#333;line-height:1.3}' +
+      '.rrc-badge{display:inline-flex;align-items:center;border-radius:999px;padding:3px 8px;font-size:.75rem;font-weight:800;background:#e9f2ff;color:#075a9c;border:1px solid #b9d7ff;white-space:nowrap}' +
+      '.rrc-badge.completed,.rrc-badge.hiring-complete{background:#e9f8ed;color:#17622a;border-color:#bce7c5}' +
+      '.rrc-badge.received{background:#e9f8ed;color:#17622a;border-color:#bce7c5}' +
+      '.rrc-badge.in-review{background:#fff6db;color:#7a4b00;border-color:#f4d273}' +
+      '.rrc-attachment-list{margin:10px 0 4px 0;padding:10px;background:#f0f7ff;border:1px solid #c0d8f5;border-radius:3px}' +
+      '.rrc-attachment-item{margin:4px 0}' +
+      '.rrc-attachment-link{color:#0056a0;font-weight:700;text-decoration:none;font-size:.9rem}' +
+      '.rrc-attachment-link:hover{text-decoration:underline}' +
+      '.rrc-file-input{width:100%;font:inherit;padding:4px 0;cursor:pointer}' +
+      '.rrc-detail{background:#fbfbfb;padding:14px}' +
+      '.rrc-detail-grid{display:grid;grid-template-columns:190px 1fr;gap:8px 12px;margin-bottom:12px}' +
+      '.rrc-detail-label{font-weight:800;color:#333;text-align:right}' +
+      '.rrc-action-card{background:#fff;border:1px solid #d0d0d0;padding:12px;margin-top:10px}' +
+      '.rrc-action-row{display:grid;grid-template-columns:180px 1fr;gap:10px;align-items:start;margin:8px 0}' +
+      '.rrc-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}' +
+      '.rrc-history{margin-top:12px;border-top:1px solid #ddd;padding-top:8px}' +
+      '.rrc-history-item{padding:5px 0;border-bottom:1px solid #eee}' +
+      '.rrc-track-card{display:grid;grid-template-columns:190px 1fr;gap:8px 12px;margin:0 0 12px 0;padding:12px;background:#f8fbff;border:1px solid #cfe4ff;border-radius:6px}' +
+      '.rrc-pending{display:inline-flex;align-items:center;border-radius:999px;padding:5px 12px;font-weight:800;background:#fff6db;color:#7a4b00;border:1px solid #f4d273;white-space:nowrap}' +
+      '.rrc-pending.admin{background:#fff0f0;color:#9b1c1c;border-color:#f0b4b4}' +
+      '.rrc-pending.done{background:#e9f8ed;color:#17622a;border-color:#bce7c5}' +
+      '.rrc-progress{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:4px}' +
+      '.rrc-step{display:inline-flex;align-items:center;gap:5px;font-size:.78rem;font-weight:800;color:#777}' +
+      '.rrc-dot{width:10px;height:10px;border-radius:50%;background:#c9c9c9;display:inline-block}' +
+      '.rrc-step.done{color:#17622a}.rrc-step.done .rrc-dot{background:#27ae60}' +
+      '.rrc-step.current{color:#075a9c}.rrc-step.current .rrc-dot{background:#0076b6;box-shadow:0 0 0 3px rgba(0,118,182,.14)}' +
+      '.rrc-pager{display:flex;justify-content:flex-end;align-items:center;gap:8px;padding:10px;border-top:1px solid #ddd;background:#fff}' +
+      '.rrc-page-info{font-size:.84rem;color:#555;margin-right:auto}' +
+      '.rrc-empty{padding:18px;text-align:center;color:#777}' +
+      '@media(max-width:900px){.rrc-filter{grid-template-columns:1fr}.rrc-detail-grid,.rrc-action-row{grid-template-columns:1fr}.rrc-detail-label{text-align:left}.rrc-tab{width:170px;min-width:170px}}';
+    document.head.appendChild(style);
+  }
+  function showWorkspace() {
+    var centerColumn = document.querySelector('.center-column');
+    var newsletter = document.querySelector('.newsletter');
+    if (centerColumn && typeof adminWorkspace !== 'undefined' && adminWorkspace) {
+      centerColumn.innerHTML = '';
+      centerColumn.appendChild(adminWorkspace);
+      centerColumn.style.display = 'block';
+    }
+    if (newsletter) newsletter.style.display = 'none';
+    if (typeof adminWorkspace !== 'undefined' && adminWorkspace) {
+      adminWorkspace.hidden = false;
+      adminWorkspace.style.display = 'grid';
+    }
+    var header = adminWorkspace ? adminWorkspace.querySelector('.admin-workspace-header') : null;
+    if (header) header.style.display = 'none';
+    if (typeof adminSections !== 'undefined' && adminSections) adminSections.innerHTML = shellHtml();
+  }
+  function shellHtml() {
+    var allR = allRows();
+    var hiringCount = allR.filter(function(r) { return r.source === 'HIRING' && !isCompleted(currentStatus(r)); }).length;
+    var adminCount = allR.filter(function(r) { return r.source === 'ADMIN' && !isCompleted(currentStatus(r)); }).length;
+    function badge(n) { return n ? '<span style="background:#c0392b;color:#fff;border-radius:999px;padding:1px 7px;font-size:11px;font-weight:800;margin-left:4px">' + n + '</span>' : ''; }
+    function tab(key, label, badgeHtml) {
+      return '<button class="rrc-tab' + (rrState.tab === key ? ' active' : '') + '" type="button" data-rrc-tab="' + attr(key) + '">' + esc(label) + (badgeHtml || '') + '</button>';
+    }
+    return '<section class="rrc-page" id="restaurantRequestReceiverPage">' +
+      '<div class="rrc-titlebar"><h3>Restaurant Request</h3>' +
+        '<div style="display:flex;gap:8px;align-items:center">' +
+          '<button class="rrc-btn" type="button" id="rrcRefreshBtn">&#x21BB; Refresh</button>' +
+          '<button class="rrc-back" type="button" id="rrcBackDashboardBtn">Back to Dashboard</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="rrc-tabs" id="rrcTabs">' +
+        tab('HIRING', 'Hiring Requests', badge(hiringCount)) +
+        tab('ADMIN', 'Admin Requests', badge(adminCount)) +
+        tab('COMPLETED', 'Completed Requests', '') +
+      '</div>' +
+      '<div class="rrc-content" id="rrcContent"><div class="rrc-section"><div class="rrc-empty">Loading requests...</div></div></div>' +
+    '</section>';
+  }
+  function tabButton(key, label) {
+    return '<button class="rrc-tab' + (rrState.tab === key ? ' active' : '') + '" type="button" data-rrc-tab="' + attr(key) + '">' + esc(label) + '</button>';
+  }
+  function bindShellEvents() {
+    var tabs = byId('rrcTabs');
+    if (tabs) {
+      tabs.querySelectorAll('[data-rrc-tab]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          rrState.tab = btn.dataset.rrcTab;
+          rrState.openKey = '';
+          rrState.filters.status = rrState.tab === 'COMPLETED' ? 'ALL' : 'ACTIVE';
+          rrState.filters.type = 'ALL';
+          rrState.page = 1;
+          renderPage();
+        });
+      });
+    }
+    var refresh = byId('rrcRefreshBtn');
+    if (refresh) {
+      refresh.addEventListener('click', function() {
+        rrState.dataLoadedAt = 0;
+        refresh.disabled = true;
+        refresh.textContent = 'Refreshing...';
+        loadData(false, true);
+        setTimeout(function() { refresh.disabled = false; refresh.textContent = '\u21BB Refresh'; }, 3000);
+      });
+    }
+    var back = byId('rrcBackDashboardBtn');
+    if (back) {
+      back.addEventListener('click', function() {
+        stopPolling_();
+        if (typeof goBackToDashboardHome === 'function') return goBackToDashboardHome();
+        if (typeof restoreDashboardHomeLayout_ === 'function') restoreDashboardHomeLayout_();
+      });
+    }
+  }
+
+  function renderPage() {
+    showWorkspace();
+    bindShellEvents();
+    renderContent();
+  }
+  function filterHtml() {
+    var restaurants = restaurantsFromData();
+    var restaurantOptions = '<option value="ALL">All Restaurants</option>' + restaurants.map(function(r) {
+      return '<option value="' + attr(r.number) + '"' + (rrState.filters.restaurant === r.number ? ' selected' : '') + '>' + esc(r.number + (r.name ? ' ' + r.name : '')) + '</option>';
+    }).join('');
+    var statusOptions = rrState.tab === 'COMPLETED'
+      ? ['ALL','Completed','Hiring Complete','Received']
+      : ['ACTIVE','Waiting Admin Action','Waiting Restaurant Action','New Request','Viewed','In Review','In Progress'];
+    var typeFilter = rrState.tab === 'ADMIN'
+      ? '<select class="rrc-select" id="rrcFilterType"><option value="ALL">All Types</option><option value="JOB_LETTER"' + ((rrState.filters.type||'ALL') === 'JOB_LETTER' ? ' selected' : '') + '>Job Letter</option><option value="OFFICE_SUPPLIES"' + ((rrState.filters.type||'ALL') === 'OFFICE_SUPPLIES' ? ' selected' : '') + '>Office Supplies</option></select>'
+      : '';
+    return '<div class="rrc-filter">' +
+      '<select class="rrc-select" id="rrcFilterRestaurant">' + restaurantOptions + '</select>' +
+      typeFilter +
+      '<select class="rrc-select" id="rrcFilterStatus">' + statusOptions.map(function(s) { return '<option value="' + attr(s) + '"' + (rrState.filters.status === s ? ' selected' : '') + '>' + esc(s === 'ACTIVE' ? 'Active Requests' : s) + '</option>'; }).join('') + '</select>' +
+      '<input class="rrc-input" id="rrcFilterSearch" type="text" placeholder="Search" value="' + attr(rrState.filters.search || '') + '" />' +
+      '<select class="rrc-select" id="rrcFilterLimit"><option value="10"' + (rrState.filters.limit === '10' ? ' selected' : '') + '>10 per page</option><option value="25"' + (rrState.filters.limit === '25' ? ' selected' : '') + '>25 per page</option><option value="50"' + (rrState.filters.limit === '50' ? ' selected' : '') + '>50 per page</option></select>' +
+      '<button class="rrc-btn primary" id="rrcApplyFilter" type="button">Apply</button>' +
+    '</div>';
+  }
+  function renderContent() {
+    var content = byId('rrcContent');
+    if (!content) return;
+    var rows = filteredRows();
+    var perPage = parseInt(rrState.filters.limit || '10', 10) || 10;
+    if (perPage < 10) perPage = 10;
+    var totalPages = Math.max(1, Math.ceil(rows.length / perPage));
+    if (rrState.page > totalPages) rrState.page = totalPages;
+    if (rrState.page < 1) rrState.page = 1;
+    var start = (rrState.page - 1) * perPage;
+    var pageRows = rows.slice(start, start + perPage);
+    content.innerHTML = '<div class="rrc-section">' + filterHtml() + tableHtml(pageRows, rows.length, perPage, start, totalPages) + '</div>';
+    bindContentEvents();
+  }
+  function tableHtml(rows, totalCount, perPage, start, totalPages) {
+    if (!totalCount) return '<div class="rrc-empty">No records found.</div>';
+    if (!rows.length) return '<div class="rrc-empty">No records found on this page.</div>';
+    var body = rows.map(function(row) {
+      var key = row.key;
+      var open = rrState.openKey === key;
+      return '<tr>' +
+        '<td>' + esc(formatDateTime(createdAt(row))) + '</td>' +
+        '<td>' + esc(typeLabel(row)) + '</td>' +
+        '<td>' + esc(restaurantNumber(row)) + '</td>' +
+        '<td>' + esc(relatedSummary(row) || '-') + '</td>' +
+        '<td><span class="rrc-pending ' + pendingClassRr(row) + '">' + esc(pendingActionRr(row)) + '</span></td>' +
+        '<td>' + badgeHtml(currentStatus(row)) + '</td>' +
+        '<td><button class="rrc-btn" type="button" data-rrc-view="' + attr(key) + '">' + (open ? 'Hide' : 'View') + '</button></td>' +
+      '</tr>' + (open ? '<tr><td colspan="7">' + detailHtml(row) + '</td></tr>' : '');
+    }).join('');
+    return '<div class="rrc-table-wrap"><table class="rrc-table"><thead><tr>' +
+      '<th>Request Date</th><th>Request Type</th><th>Restaurant Number</th><th>Related</th><th>Pending Action</th><th>Status</th><th>Action</th>' +
+      '</tr></thead><tbody>' + body + '</tbody></table></div>' + pagerHtml(totalCount, perPage, start, totalPages);
+  }
+  function pagerHtml(totalCount, perPage, start, totalPages) {
+    var showingStart = totalCount ? start + 1 : 0;
+    var showingEnd = Math.min(start + perPage, totalCount);
+    var prevDisabled = rrState.page <= 1 ? ' disabled' : '';
+    var nextDisabled = rrState.page >= totalPages ? ' disabled' : '';
+    return '<div class="rrc-pager">' +
+      '<span class="rrc-page-info">Showing ' + showingStart + ' to ' + showingEnd + ' of ' + totalCount + '</span>' +
+      '<button class="rrc-btn" type="button" id="rrcPrevPage"' + prevDisabled + '>Prev</button>' +
+      '<span class="rrc-page-info">Page ' + rrState.page + ' of ' + totalPages + '</span>' +
+      '<button class="rrc-btn" type="button" id="rrcNextPage"' + nextDisabled + '>Next</button>' +
+    '</div>';
+  }
+  function badgeHtml(status) {
+    var cls = normalizeStatus(status).toLowerCase().replace(/\s+/g, '-');
+    return '<span class="rrc-badge ' + attr(cls) + '">' + esc(normalizeStatus(status)) + '</span>';
+  }
+  function detailHtml(row) {
+    var status = normalizeStatus(currentStatus(row));
+    var isDone = isCompleted(status);
+    var action = isDone ? '' : actionHtml(row);
+    var type = String(row.requestType || row.request_type || '').toUpperCase();
+    var typeFields = '';
+    if (row.source === 'HIRING') {
+      typeFields =
+        detailItem('Position', clean(getAny(row, ['position','required_position','requiredPosition','applied_for_role','requestedForRole']))) +
+        detailItem('Employment Type', clean(getAny(row, ['employmentType','employment_type']))) +
+        detailItem('Headcount', clean(getAny(row, ['headcount','numberNeeded','number_needed','count','qty']))) +
+        detailItem('Priority / Urgency', clean(getAny(row, ['priority','urgency']))) +
+        detailItem('Needed By', clean(getAny(row, ['neededBy','needed_by']))) +
+        detailItem('Reason', clean(getAny(row, ['reason','restaurantNotes','additionalDetails','business_reason','businessReason'])));
+    } else if (type.indexOf('JOB') !== -1 || type.indexOf('LETTER') !== -1) {
+      typeFields =
+        detailItem('Employee Name', clean(row.employeeName || row.employee_name || '')) +
+        detailItem('Type of Letter', clean(row.letterType || row.letter_type || '')) +
+        detailItem('Gender', clean(row.gender || '')) +
+        detailItem('Position', clean(row.position || '') + (clean(row.manualPosition || row.manual_position || '') ? ' (' + clean(row.manualPosition || row.manual_position || '') + ')' : '')) +
+        detailItem('Employee Status', clean(row.employeeStatus || row.employee_status || '')) +
+        detailItem('Employment Type', clean(row.employmentType || row.employment_type || '')) +
+        detailItem('Started Working', clean(row.startedDate || row.started_date || ''));
+    } else if (type.indexOf('SUPPLY') !== -1 || type.indexOf('SUPPLIES') !== -1) {
+      typeFields =
+        detailItem('Request Type', clean(row.supplyType || row.supply_type || '')) +
+        detailItem('Supplies Needed', clean(row.supplyDetails || row.supply_details || ''));
+    }
+    var attachmentHtml = '';
+    var attachments = Array.isArray(row.attachments) ? row.attachments : [];
+    if (attachments.length) {
+      attachmentHtml = '<div class="rrc-attachment-list">' + attachments.map(function(att) {
+        return '<div class="rrc-attachment-item"><a class="rrc-attachment-link" href="' + esc(att.url || '') + '" target="_blank">&#x1F4CE; ' + esc(att.name || 'Download Letter') + '</a></div>';
+      }).join('') + '</div>';
+    }
+    return '<div class="rrc-detail">' +
+      trackingCardRr(row) +
+      '<div class="rrc-detail-grid">' +
+        detailItem('Request ID', requestId(row)) +
+        detailItem('Request Type', typeLabel(row)) +
+        detailItem('Restaurant Number', restaurantNumber(row)) +
+        detailItem('Current Status', status) +
+        detailItem('Request Date', formatDateTime(createdAt(row))) +
+        detailItem('Issuer Notes', issuerNotes(row)) +
+        typeFields +
+        detailItem('Admin Notes', adminNotes(row) || '-') +
+      '</div>' +
+      attachmentHtml + action + historyHtml(row) +
+    '</div>';
+  }
+
+  function pendingActionRr(row) {
+    var st = normalizeStatus(currentStatus(row)).toLowerCase();
+    if (st === 'completed' && row.source === 'ADMIN') return 'Waiting Restaurant Confirmation';
+    if (st === 'completed' || st === 'received' || st === 'hiring complete') return 'Completed';
+    if (st === 'rejected' || st === 'cancelled' || st === 'closed') return 'Closed';
+    if (st.indexOf('waiting') !== -1 && st.indexOf('restaurant') !== -1) return 'Waiting Restaurant';
+    return 'Admin Action Needed';
+  }
+  function pendingClassRr(row) {
+    var p = pendingActionRr(row);
+    if (p === 'Completed' || p === 'Closed') return 'done';
+    if (p === 'Waiting Restaurant Confirmation') return 'you';
+    if (p === 'Admin Action Needed') return 'admin';
+    return '';
+  }
+  function trackingCardRr(row) {
+    return '<div class="rrc-track-card">' +
+      '<div class="rrc-detail-label">Pending Action</div><div><span class="rrc-pending ' + pendingClassRr(row) + '">' + esc(pendingActionRr(row)) + '</span></div>' +
+      '<div class="rrc-detail-label">Progress</div><div>' + progressHtmlRr(row) + '</div>' +
+      '</div>';
+  }
+  function progressHtmlRr(row) {
+    var st = normalizeStatus(currentStatus(row)).toLowerCase();
+    var steps = ['Submitted','Viewed','In Review','Waiting','Completed','Received'];
+    var index = 0;
+    if (st === 'viewed') index = 1;
+    if (st.indexOf('review') !== -1 || st.indexOf('progress') !== -1) index = 2;
+    if (st.indexOf('waiting') !== -1) index = 3;
+    if (st === 'completed' || st === 'hiring complete') index = 4;
+    if (st === 'received') index = 5;
+    return '<div class="rrc-progress">' + steps.map(function(step, i) {
+      var cls = i < index ? ' done' : (i === index ? ' current' : '');
+      return '<span class="rrc-step' + cls + '"><span class="rrc-dot"></span>' + esc(step) + '</span>';
+    }).join('') + '</div>';
+  }
+
+  function detailItem(label, value) {
+    return '<div class="rrc-detail-label">' + esc(label) + '</div><div>' + esc(value || '-') + '</div>';
+  }
+  function actionHtml(row) {
+    var key = row.key;
+    var type = String(row.requestType || row.request_type || '').toUpperCase();
+    var status = normalizeStatus(currentStatus(row));
+    if (row.source === 'ADMIN' && (type.indexOf('JOB') !== -1 || type.indexOf('LETTER') !== -1)) {
+      return '<div class="rrc-action-card">' +
+        '<strong>Complete Job Letter Request</strong>' +
+        '<div class="rrc-action-row"><label>Admin Notes</label><textarea class="rrc-textarea" data-rrc-note="' + attr(key) + '" placeholder="Add notes for the restaurant">' + esc(adminNotes(row)) + '</textarea></div>' +
+        '<div class="rrc-action-row"><label>Upload Letter (PDF/Image)</label><input type="file" class="rrc-file-input" data-rrc-file="' + attr(key) + '" accept=".pdf,.png,.jpg,.jpeg,.doc,.docx" /></div>' +
+        '<div class="rrc-actions"><button class="rrc-btn primary" type="button" data-rrc-job-done="' + attr(key) + '">Done \u2014 Mark Completed</button></div>' +
+      '</div>';
+    }
+    if (row.source === 'ADMIN' && (type.indexOf('SUPPLY') !== -1 || type.indexOf('SUPPLIES') !== -1) && status === 'Completed') {
+      return '<div class="rrc-action-card">' +
+        '<strong>Awaiting Restaurant Confirmation</strong>' +
+        '<p style="margin:6px 0;color:#555;font-size:.88em">Restaurant has not yet confirmed receipt.</p>' +
+        '<div class="rrc-actions"><button class="rrc-btn primary" type="button" data-rrc-received="' + attr(key) + '">Confirm Received</button></div>' +
+      '</div>';
+    }
+    if (row.source === 'ADMIN' && (type.indexOf('SUPPLY') !== -1 || type.indexOf('SUPPLIES') !== -1)) {
+      return '<div class="rrc-action-card">' +
+        '<strong>Update Office Supplies Request</strong>' +
+        '<div class="rrc-action-row"><label>Status</label><select class="rrc-select" data-rrc-status="' + attr(key) + '"><option value="">Select Status</option><option value="In Review">In Review</option><option value="In Progress">In Progress</option><option value="Waiting for Restaurant">Waiting for Restaurant</option><option value="Completed">Completed</option></select></div>' +
+        '<div class="rrc-action-row"><label>Quantity</label><input class="rrc-input" data-rrc-quantity="' + attr(key) + '" value="' + attr(quantity(row)) + '" /></div>' +
+        '<div class="rrc-action-row"><label>Notes</label><textarea class="rrc-textarea" data-rrc-note="' + attr(key) + '" placeholder="Write update notes">' + esc(adminNotes(row)) + '</textarea></div>' +
+        '<div class="rrc-actions"><button class="rrc-btn primary" type="button" data-rrc-save="' + attr(key) + '">Save</button></div>' +
+      '</div>';
+    }
+    var statusOptions = row.source === 'HIRING' ? ['In Review','In Progress','Waiting for Restaurant','Hiring Complete'] : ['In Review','In Progress','Waiting for Restaurant','Completed'];
+    return '<div class="rrc-action-card">' +
+      '<strong>Update Request</strong>' +
+      '<div class="rrc-action-row"><label>Status</label><select class="rrc-select" data-rrc-status="' + attr(key) + '"><option value="">Select Status</option>' + statusOptions.map(function(s) { return '<option value="' + attr(s) + '">' + esc(s) + '</option>'; }).join('') + '</select></div>' +
+      '<div class="rrc-action-row"><label>Notes</label><textarea class="rrc-textarea" data-rrc-note="' + attr(key) + '" placeholder="Write update notes">' + esc(adminNotes(row)) + '</textarea></div>' +
+      '<div class="rrc-actions"><button class="rrc-btn primary" type="button" data-rrc-save="' + attr(key) + '">Save</button></div>' +
+    '</div>';
+  }
+  function historyHtml(row) {
+    var list = history(row);
+    if (!list.length) return '<div class="rrc-history"><strong>History</strong><div class="rrc-empty">No history yet.</div></div>';
+    return '<div class="rrc-history"><strong>History</strong>' + list.map(function(item) {
+      return '<div class="rrc-history-item">' + esc(formatDateTime(item.at || item.date || item.created_at || '')) + ' ' + esc(item.status || item.action || '') + (item.note ? ' - ' + esc(item.note) : '') + '</div>';
+    }).join('') + '</div>';
+  }
+  function bindContentEvents() {
+    var apply = byId('rrcApplyFilter');
+    if (apply) apply.addEventListener('click', applyFilters);
+    var prevPage = byId('rrcPrevPage');
+    if (prevPage) prevPage.addEventListener('click', function() {
+      if (rrState.page > 1) { rrState.page -= 1; rrState.openKey = ''; renderContent(); }
+    });
+    var nextPage = byId('rrcNextPage');
+    if (nextPage) nextPage.addEventListener('click', function() {
+      rrState.page += 1; rrState.openKey = ''; renderContent();
+    });
+    var search = byId('rrcFilterSearch');
+    if (search) {
+      var searchDebounce_;
+      search.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { applyFilters(); return; }
+        clearTimeout(searchDebounce_);
+        searchDebounce_ = setTimeout(applyFilters, 300);
+      });
+    }
+    document.querySelectorAll('[data-rrc-view]').forEach(function(btn) {
+      btn.addEventListener('click', function() { toggleView(btn.getAttribute('data-rrc-view')); });
+    });
+    document.querySelectorAll('[data-rrc-save]').forEach(function(btn) {
+      btn.addEventListener('click', function() { saveStatus(btn.getAttribute('data-rrc-save')); });
+    });
+    document.querySelectorAll('[data-rrc-job-done]').forEach(function(btn) {
+      btn.addEventListener('click', function() { saveJobLetterDone_(btn.getAttribute('data-rrc-job-done')); });
+    });
+    document.querySelectorAll('[data-rrc-received]').forEach(function(btn) {
+      btn.addEventListener('click', function() { saveReceived_(btn.getAttribute('data-rrc-received')); });
+    });
+  }
+  function applyFilters() {
+    rrState.filters.restaurant = (byId('rrcFilterRestaurant') || {}).value || 'ALL';
+    rrState.filters.type = (byId('rrcFilterType') || {}).value || 'ALL';
+    rrState.filters.status = (byId('rrcFilterStatus') || {}).value || 'ACTIVE';
+    rrState.filters.search = (byId('rrcFilterSearch') || {}).value || '';
+    rrState.filters.limit = (byId('rrcFilterLimit') || {}).value || '10';
+    rrState.page = 1;
+    rrState.openKey = '';
+    renderContent();
+  }
+  function findRow(key) { return allRows().find(function(r) { return r.key === key; }); }
+  function toggleView(key) {
+    rrState.openKey = rrState.openKey === key ? '' : key;
+    var row = findRow(key);
+    if (row && rrState.openKey === key && !isCompleted(currentStatus(row)) && currentStatus(row) === 'New Request') markViewed(row);
+    renderContent();
+  }
+  function markViewed(row) {
+    row.status = 'Viewed';
+    var hist = history(row);
+    hist.push({ at: new Date().toISOString(), status: 'Viewed', note: 'Request viewed' });
+    row.statusHistory = hist;
+    notify('Request marked as viewed.', 'success');
+    try {
+      var runner = google.script.run.withSuccessHandler(function() {});
+      if (runner && typeof runner.withFailureHandler === 'function') runner = runner.withFailureHandler(function() {});
+      runner.markRestaurantRequestReceiverViewed({ sessionToken: token_(), source: row.source, requestId: requestId(row) });
+    } catch (error) {}
+  }
+  function saveStatus(key) {
+    var row = findRow(key);
+    if (!row) return notify('Request not found.', 'error');
+    var statusEl = document.querySelector('[data-rrc-status="' + cssKey(key) + '"]');
+    var noteEl = document.querySelector('[data-rrc-note="' + cssKey(key) + '"]');
+    var qtyEl = document.querySelector('[data-rrc-quantity="' + cssKey(key) + '"]');
+    var status = statusEl ? statusEl.value : '';
+    if (!status) return notify('Select status first.', 'error');
+    var note = noteEl ? noteEl.value : '';
+    var qty = qtyEl ? qtyEl.value : '';
+    var btn = document.querySelector('[data-rrc-save="' + cssKey(key) + '"]');
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+    rrState.saving = true;
+    applyLocalUpdate(row, status, note, qty);
+    if (isCompleted(status)) rrState.openKey = '';
+    renderContent();
+    notify('Status updated on screen. Saving in background.', 'success');
+    try {
+      google.script.run.withSuccessHandler(function(response) {
+        rrState.saving = false;
+        if (!response || !response.success) {
+          notify((response && response.error) || 'Could not save request.', 'error');
+          return loadData(true, true);
+        }
+        notify('Saved.', 'success');
+      }).withFailureHandler(function(error) {
+        rrState.saving = false;
+        notify(error && error.message ? error.message : 'Could not save request.', 'error');
+        loadData(true, true);
+      }).updateRestaurantRequestReceiverStatus({
+        sessionToken: token_(),
+        source: row.source,
+        requestId: requestId(row),
+        status: serverStatus(status, row.source),
+        displayStatus: status,
+        notes: note,
+        quantity: qty
+      });
+    } catch (error) {
+      rrState.saving = false;
+      notify(error.message || 'Could not save request.', 'error');
+      loadData(true, true);
+    }
+  }
+  function applyLocalUpdate(row, status, note, qty) {
+    row.status = status;
+    row.adminNotes = note;
+    row.hrNotes = note;
+    if (qty !== undefined) row.quantity = qty;
+    var hist = history(row);
+    hist.push({ at: new Date().toISOString(), status: status, note: note, quantity: qty });
+    row.statusHistory = hist;
+  }
+  function saveJobLetterDone_(key) {
+    var row = findRow(key);
+    if (!row) return notify('Request not found.', 'error');
+    var noteEl = document.querySelector('[data-rrc-note="' + cssKey(key) + '"]');
+    var fileEl = document.querySelector('[data-rrc-file="' + cssKey(key) + '"]');
+    var note = noteEl ? noteEl.value : '';
+    var btn = document.querySelector('[data-rrc-job-done="' + cssKey(key) + '"]');
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving\u2026'; }
+    rrState.saving = true;
+    var file = fileEl && fileEl.files && fileEl.files[0] ? fileEl.files[0] : null;
+    function completeLetter(attachment) {
+      applyLocalUpdate(row, 'Completed', note, '');
+      if (attachment) { row.attachments = Array.isArray(row.attachments) ? row.attachments : []; row.attachments.push(attachment); }
+      rrState.openKey = ''; rrState.saving = false;
+      renderContent();
+      notify('Request marked as Completed.', 'success');
+      try {
+        google.script.run
+          .withSuccessHandler(function(res) { if (!res || !res.success) { notify((res && res.error) || 'Status save failed.', 'error'); loadData(true, true); } })
+          .withFailureHandler(function(err) { notify(err && err.message ? err.message : 'Status save failed.', 'error'); loadData(true, true); })
+          .updateRestaurantRequestReceiverStatus({ sessionToken: token_(), source: row.source, requestId: requestId(row), status: 'Completed', displayStatus: 'Completed', notes: note, quantity: '' });
+      } catch (e) { notify(e.message || 'Could not save.', 'error'); loadData(true, true); }
+    }
+    if (file) {
+      var reader = new FileReader();
+      reader.onload = function(evt) {
+        var base64 = (evt.target.result || '').split(',')[1] || '';
+        try {
+          google.script.run
+            .withSuccessHandler(function(res) {
+              if (!res || !res.success) { notify((res && res.error) || 'Upload failed.', 'error'); rrState.saving = false; if (btn) { btn.disabled = false; btn.textContent = 'Done \u2014 Mark Completed'; } return; }
+              completeLetter(res.data && res.data.attachment ? res.data.attachment : null);
+            })
+            .withFailureHandler(function(err) { notify(err && err.message ? err.message : 'Upload failed.', 'error'); rrState.saving = false; if (btn) { btn.disabled = false; btn.textContent = 'Done \u2014 Mark Completed'; } })
+            .uploadRestaurantRequestLetter({ sessionToken: token_(), requestId: requestId(row), fileName: file.name, mimeType: file.type || 'application/octet-stream', base64: base64 });
+        } catch (e) { notify(e.message || 'Upload failed.', 'error'); rrState.saving = false; if (btn) { btn.disabled = false; btn.textContent = 'Done \u2014 Mark Completed'; } }
+      };
+      reader.onerror = function() { notify('Could not read file.', 'error'); rrState.saving = false; if (btn) { btn.disabled = false; btn.textContent = 'Done \u2014 Mark Completed'; } };
+      reader.readAsDataURL(file);
+    } else {
+      completeLetter(null);
+    }
+  }
+  function saveReceived_(key) {
+    var row = findRow(key);
+    if (!row) return notify('Request not found.', 'error');
+    var btn = document.querySelector('[data-rrc-received="' + cssKey(key) + '"]');
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving\u2026'; }
+    rrState.saving = true;
+    applyLocalUpdate(row, 'Received', '', '');
+    rrState.openKey = ''; rrState.saving = false;
+    renderContent();
+    notify('Marked as Received.', 'success');
+    try {
+      google.script.run
+        .withSuccessHandler(function(res) { if (!res || !res.success) { notify((res && res.error) || 'Could not save.', 'error'); loadData(true, true); } })
+        .withFailureHandler(function(err) { notify(err && err.message ? err.message : 'Could not save.', 'error'); loadData(true, true); })
+        .updateRestaurantRequestReceiverStatus({ sessionToken: token_(), source: row.source, requestId: requestId(row), status: 'Received', displayStatus: 'Received', notes: '', quantity: quantity(row) || '' });
+    } catch (e) { notify(e.message || 'Could not save.', 'error'); loadData(true, true); }
+  }
+  function startPolling_() {
+    if (rrPollInterval_) return;
+    rrPollInterval_ = setInterval(function() {
+      if (document.hidden) return;
+      if (rrState.saving) return;
+      try {
+        google.script.run
+          .withSuccessHandler(function(res) {
+            if (!res || !res.success) return;
+            var ts = String(res.data && res.data.timestamp ? res.data.timestamp : '0');
+            if (ts !== rrState.lastKnownTimestamp && rrState.lastKnownTimestamp !== '0') {
+              rrState.lastKnownTimestamp = ts;
+              loadData(true, true);
+            } else {
+              rrState.lastKnownTimestamp = ts;
+            }
+          })
+          .withFailureHandler(function() {})
+          .getLastUpdatedTimestamp({ sessionToken: token_() });
+      } catch (e) {}
+    }, 30000);
+  }
+  function stopPolling_() {
+    if (rrPollInterval_) { clearInterval(rrPollInterval_); rrPollInterval_ = null; }
+  }
+  function loadData(silent, force) {
+    if (!force && rrState.data && Date.now() - (rrState.dataLoadedAt || 0) < 45000) {
+      renderPage();
+      return;
+    }
+    if (!silent) {
+      var content = byId('rrcContent');
+      if (content) content.innerHTML = '<div class="rrc-section"><div class="rrc-empty">Loading requests...</div></div>';
+    }
+    google.script.run.withSuccessHandler(function(response) {
+      if (!response || !response.success) {
+        rrState.data = { hiringRequests: [], adminRequests: [], restaurants: restaurantsFromData() };
+        renderPage();
+        return notify((response && response.error) || 'Could not load restaurant requests.', 'error');
+      }
+      rrState.data = response.data || response.payload || response;
+      rrState.dataLoadedAt = Date.now();
+      renderPage();
+    }).withFailureHandler(function(error) {
+      rrState.data = { hiringRequests: [], adminRequests: [], restaurants: restaurantsFromData() };
+      renderPage();
+      notify(error && error.message ? error.message : 'Could not load restaurant requests.', 'error');
+    }).getRestaurantRequestReceiverData({ sessionToken: token_(), forceRefresh: Boolean(force) });
+  }
+  function openRestaurantRequestReceiverPage() {
+    hideAllPages_();
+    injectStyle();
+    if (typeof closeRoleActionsDropdown_ === 'function') closeRoleActionsDropdown_();
+    showWorkspace();
+    bindShellEvents();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (rrState.data) renderContent();
+    loadData(Boolean(rrState.data), false);
+    startPolling_();
+  }
+
+  window.openRestaurantRequestReceiverPage = openRestaurantRequestReceiverPage;
+})();
+</script>

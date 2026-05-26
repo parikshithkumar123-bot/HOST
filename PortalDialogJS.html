@@ -1,0 +1,230 @@
+<script>
+/**
+ * PortalDialogJS_v413
+ *
+ * Global in-app alert, confirm, and prompt modal.
+ * This keeps popup messages inside the webapp instead of browser dialogs.
+ */
+(function portalDialogV413() {
+  if (window.__portalDialogV413Loaded) return;
+  window.__portalDialogV413Loaded = true;
+
+  function ensureStyle() {
+    if (document.getElementById('portalDialogV413Style')) return;
+
+    var style = document.createElement('style');
+    style.id = 'portalDialogV413Style';
+    style.textContent = ''
+      + '.portal-dialog-backdrop-v413{position:fixed;inset:0;background:rgba(15,23,42,.48);z-index:999999;display:flex;align-items:center;justify-content:center;padding:18px;box-sizing:border-box}'
+      + '.portal-dialog-card-v413{width:min(520px,calc(100vw - 28px));max-height:calc(100vh - 32px);overflow:auto;background:#fff;border:1px solid #b8c2cc;box-shadow:0 24px 70px rgba(0,0,0,.28);border-radius:10px;font-family:Arial,sans-serif;color:#111}'
+      + '.portal-dialog-head-v413{min-height:52px;background:#0076b6;color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 16px;box-sizing:border-box}'
+      + '.portal-dialog-head-v413 h3{margin:0;color:#fff;font-size:20px;font-weight:700;line-height:1.2}'
+      + '.portal-dialog-close-v413{border:1px solid rgba(255,255,255,.6);background:rgba(255,255,255,.16);color:#fff;border-radius:4px;min-height:32px;padding:0 10px;font-weight:700;cursor:pointer}'
+      + '.portal-dialog-body-v413{padding:18px 18px 8px;font-size:15px;line-height:1.45;color:#1f2933}'
+      + '.portal-dialog-message-v413{white-space:pre-wrap;margin:0 0 12px}'
+      + '.portal-dialog-input-v413{width:100%;min-height:38px;border:1px solid #9aa5b1;border-radius:5px;padding:8px 10px;font:inherit;box-sizing:border-box;margin-top:8px;background:#fff}'
+      + '.portal-dialog-actions-v413{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px 18px;flex-wrap:wrap}'
+      + '.portal-dialog-btn-v413{min-height:36px;border:1px solid #9aa5b1;background:#f5f7fa;color:#111;border-radius:5px;padding:0 14px;font-weight:700;cursor:pointer}'
+      + '.portal-dialog-btn-v413.primary{background:#0076b6;border-color:#0076b6;color:#fff}'
+      + '.portal-dialog-btn-v413.danger{background:#b51218;border-color:#b51218;color:#fff}'
+      + '.portal-dialog-btn-v413:disabled{opacity:.65;cursor:not-allowed}'
+      + '.portal-toast-inline-v413{position:fixed;right:18px;bottom:18px;z-index:999998;max-width:min(420px,calc(100vw - 36px));padding:12px 14px;border-radius:8px;background:#eef6ff;color:#16456b;border:1px solid #bcd7ef;box-shadow:0 14px 34px rgba(0,0,0,.18);font-family:Arial,sans-serif;font-weight:700;line-height:1.35}'
+      + '.portal-toast-inline-v413.success{background:#e9f8ed;color:#17622a;border-color:#bce7c5}'
+      + '.portal-toast-inline-v413.error{background:#fff0f0;color:#9b1c1c;border-color:#f3b4b4}'
+      + '.portal-toast-inline-v413.warning{background:#fff8e6;color:#7a5200;border-color:#f5dba0}'
+      + '@media(max-width:720px){'
+      + '.portal-dialog-backdrop-v413{align-items:flex-end;padding:0;background:rgba(15,23,42,.55)}'
+      + '.portal-dialog-card-v413{width:100%;max-height:88vh;border-radius:14px 14px 0 0;border-left:0;border-right:0;border-bottom:0}'
+      + '.portal-dialog-head-v413{min-height:54px;padding:0 14px}'
+      + '.portal-dialog-head-v413 h3{font-size:18px}'
+      + '.portal-dialog-actions-v413{display:grid;grid-template-columns:1fr;gap:8px}'
+      + '.portal-dialog-btn-v413{width:100%;min-height:42px}'
+      + '.dashboard-stage{width:100%!important;margin:0!important;gap:10px!important}'
+      + '.app-shell{padding:8px!important}'
+      + '.topbar{border-radius:18px!important;padding:12px!important}'
+      + '.topbar-main{gap:10px!important}'
+      + '.top-actions{width:100%!important;display:grid!important;grid-template-columns:1fr 1fr!important;gap:8px!important}'
+      + '.top-actions button,.premium-role-btn{width:100%!important;min-height:40px!important}'
+      + '.premium-role-dropdown{width:100%!important}'
+      + '.premium-role-menu{left:0!important;right:0!important;min-width:0!important;width:100%!important;max-height:65vh!important}'
+      + '.admin-table-wrap,.p60-table-wrap,.rtc-table-wrap,.rrc-table-wrap,.mtc-table-wrap{overflow-x:auto!important;-webkit-overflow-scrolling:touch!important}'
+      + '.admin-table,.p60-read-table,.rtc-table,.rrc-table,.mtc-table{min-width:720px!important}'
+      + 'input,select,textarea{font-size:16px!important}'
+      + '}';
+
+    document.head.appendChild(style);
+  }
+
+  function removeExisting() {
+    var old = document.getElementById('portalDialogV413Backdrop');
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+  }
+
+  function dialog(options) {
+    ensureStyle();
+    removeExisting();
+
+    options = options || {};
+    var type = options.type || 'info';
+    var title = options.title || (type === 'confirm' ? 'Please Confirm' : type === 'prompt' ? 'Input Required' : 'Message');
+    var message = options.message || '';
+    var inputType = options.inputType || 'text';
+    var defaultValue = options.defaultValue || '';
+
+    var backdrop = document.createElement('div');
+    backdrop.className = 'portal-dialog-backdrop-v413';
+    backdrop.id = 'portalDialogV413Backdrop';
+
+    var primaryClass = options.danger ? 'danger' : 'primary';
+    var inputHtml = type === 'prompt'
+      ? '<input class="portal-dialog-input-v413" id="portalDialogV413Input" type="' + inputType + '" value="' + escapeAttr(defaultValue) + '" autocomplete="off">'
+      : '';
+
+    backdrop.innerHTML =
+      '<div class="portal-dialog-card-v413" role="dialog" aria-modal="true">' +
+        '<div class="portal-dialog-head-v413">' +
+          '<h3>' + escapeHtml(title) + '</h3>' +
+          '<button class="portal-dialog-close-v413" type="button" data-v413-cancel>Close</button>' +
+        '</div>' +
+        '<div class="portal-dialog-body-v413">' +
+          '<p class="portal-dialog-message-v413">' + escapeHtml(message) + '</p>' +
+          inputHtml +
+        '</div>' +
+        '<div class="portal-dialog-actions-v413">' +
+          (type === 'alert' ? '' : '<button class="portal-dialog-btn-v413" type="button" data-v413-cancel>' + escapeHtml(options.cancelText || 'Cancel') + '</button>') +
+          '<button class="portal-dialog-btn-v413 ' + primaryClass + '" type="button" data-v413-ok>' + escapeHtml(options.okText || 'OK') + '</button>' +
+        '</div>' +
+      '</div>';
+
+    document.body.appendChild(backdrop);
+
+    var input = document.getElementById('portalDialogV413Input');
+    var ok = backdrop.querySelector('[data-v413-ok]');
+    var cancels = backdrop.querySelectorAll('[data-v413-cancel]');
+
+    function close() {
+      if (backdrop && backdrop.parentNode) backdrop.parentNode.removeChild(backdrop);
+    }
+
+    ok.onclick = function() {
+      var value = input ? input.value : true;
+      close();
+      if (typeof options.onOk === 'function') options.onOk(value);
+    };
+
+    Array.prototype.forEach.call(cancels, function(btn) {
+      btn.onclick = function() {
+        close();
+        if (typeof options.onCancel === 'function') options.onCancel();
+      };
+    });
+
+    backdrop.addEventListener('click', function(event) {
+      if (event.target === backdrop) {
+        close();
+        if (typeof options.onCancel === 'function') options.onCancel();
+      }
+    });
+
+    document.addEventListener('keydown', function escHandler(event) {
+      if (event.key !== 'Escape') return;
+      document.removeEventListener('keydown', escHandler);
+      close();
+      if (typeof options.onCancel === 'function') options.onCancel();
+    });
+
+    if (input) {
+      setTimeout(function() { try { input.focus(); input.select(); } catch (e) {} }, 60);
+      input.addEventListener('keydown', function(event) {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          ok.click();
+        }
+      });
+    } else {
+      setTimeout(function() { try { ok.focus(); } catch (e) {} }, 60);
+    }
+  }
+
+  function toast(message, type) {
+    ensureStyle();
+    var old = document.getElementById('portalToastInlineV413');
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+
+    var box = document.createElement('div');
+    box.id = 'portalToastInlineV413';
+    box.className = 'portal-toast-inline-v413 ' + (type || 'info');
+    box.textContent = String(message || '');
+    document.body.appendChild(box);
+
+    clearTimeout(box._timer);
+    box._timer = setTimeout(function() {
+      if (box && box.parentNode) box.parentNode.removeChild(box);
+    }, 3400);
+  }
+
+  function escapeHtml(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function escapeAttr(value) {
+    return escapeHtml(value).replace(/`/g, '&#096;');
+  }
+
+  window.appAlertV413 = function(message, type, title) {
+    dialog({
+      type: 'alert',
+      title: title || (type === 'error' ? 'Error' : type === 'success' ? 'Success' : 'Message'),
+      message: message || '',
+      okText: 'OK'
+    });
+  };
+
+  window.appConfirmV413 = function(message, onYes, onNo, options) {
+    options = options || {};
+    dialog({
+      type: 'confirm',
+      title: options.title || 'Please Confirm',
+      message: message || '',
+      okText: options.okText || 'Yes',
+      cancelText: options.cancelText || 'Cancel',
+      danger: !!options.danger,
+      onOk: onYes,
+      onCancel: onNo
+    });
+  };
+
+  window.appPromptV413 = function(message, defaultValue, onSubmit, options) {
+    options = options || {};
+    dialog({
+      type: 'prompt',
+      title: options.title || 'Input Required',
+      message: message || '',
+      defaultValue: defaultValue || '',
+      inputType: options.inputType || 'text',
+      okText: options.okText || 'Save',
+      cancelText: options.cancelText || 'Cancel',
+      onOk: onSubmit,
+      onCancel: options.onCancel
+    });
+  };
+
+  window.portalToastV413 = toast;
+
+  // Browser alert fallback now appears inside the webapp.
+  window.alert = function(message) {
+    if (typeof window.showToast === 'function') {
+      try {
+        window.showToast(String(message || ''), 'info');
+        return;
+      } catch (e) {}
+    }
+    toast(String(message || ''), 'info');
+  };
+})();
+</script>
